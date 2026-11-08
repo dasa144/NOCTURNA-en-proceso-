@@ -781,10 +781,19 @@ h1 {
   }
 }
 
+/* El reparto se ve siempre, aunque el sistema tenga las animaciones
+   desactivadas (la regla general de arriba las quitaba todas). */
 @media (prefers-reduced-motion: reduce) {
-  .carta,
+  .carta {
+    transition-duration: 0.55s !important;
+  }
+
   .carta-interior {
-    transition-duration: 0.01s;
+    transition-duration: 0.7s !important;
+  }
+
+  .carta.sin-transicion {
+    transition-duration: 0s !important;
   }
 }
 

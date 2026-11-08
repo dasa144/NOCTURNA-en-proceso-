@@ -300,14 +300,15 @@ const ROLES = {
 }
 
 const REVERSO = '/cartas/reverso.webp'
-const reduceMovimiento = window.matchMedia('(prefers-reduced-motion: reduce)').matches
 
 let partida = null
 let temporizadoresMesa = []
 
+// El reparto se anima siempre, aunque el sistema tenga las animaciones
+// reducidas: es parte del juego, no un adorno.
 function esperar(ms) {
   return new Promise(resolve => {
-    temporizadoresMesa.push(setTimeout(resolve, reduceMovimiento ? Math.min(ms, 60) : ms))
+    temporizadoresMesa.push(setTimeout(resolve, ms))
   })
 }
 
@@ -410,15 +411,21 @@ function dibujarMesa() {
   partida.cartas = partida.asientos.map((asiento, i) => {
     const carta = crearCarta(asiento)
     carta.style.zIndex = String(100 - i)
-    const desorden = {
-      x: (Math.random() - 0.5) * anchoCarta * 1.4,
-      y: (Math.random() - 0.5) * anchoCarta * 1.1,
-      giro: (Math.random() - 0.5) * 160
-    }
-    colocarCarta(carta, desorden.x, desorden.y, desorden.giro)
+    const elemento = { carta, asiento, giroFinal: (Math.random() - 0.5) * 8 }
+    desordenarEnMonton(elemento, anchoCarta)
     mesa.appendChild(carta)
-    return { carta, asiento, giroFinal: (Math.random() - 0.5) * 8 }
+    return elemento
   })
+}
+
+// Coloca una carta en un sitio al azar del montón del centro.
+function desordenarEnMonton({ carta }, anchoCarta) {
+  colocarCarta(
+    carta,
+    (Math.random() - 0.5) * anchoCarta * 1.5,
+    (Math.random() - 0.5) * anchoCarta * 1.2,
+    (Math.random() - 0.5) * 170
+  )
 }
 
 function unirNombres(nombres) {
@@ -433,7 +440,16 @@ function moverCartaAsiento({ carta, asiento, giroFinal }) {
 async function repartirCartas() {
   const id = partida.id
   $('#mesa-estado').textContent = 'Barajando las cartas…'
-  await esperar(1100)
+  await esperar(900)
+
+  // Se remueve el montón un par de veces, como si alguien barajara.
+  const anchoCarta = $('#mesa').querySelector('.carta')?.offsetWidth || 60
+  for (let vuelta = 0; vuelta < 3; vuelta++) {
+    if (!partida || partida.id !== id) return
+    partida.cartas.forEach(elemento => desordenarEnMonton(elemento, anchoCarta))
+    await esperar(650)
+  }
+  await esperar(500)
 
   $('#mesa-estado').textContent = 'Repartiendo…'
 
@@ -442,7 +458,7 @@ async function repartirCartas() {
     elemento.carta.classList.add('en-movimiento')
     elemento.carta.style.zIndex = '200'
     moverCartaAsiento(elemento)
-    await esperar(320)
+    await esperar(520)
     elemento.carta.style.zIndex = elemento.asiento.soyYo ? '150' : '50'
     elemento.asiento.etiqueta.classList.add('visible')
   }
