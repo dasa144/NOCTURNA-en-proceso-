@@ -197,14 +197,23 @@ io.on('connection', socket => {
     sala.roles = repartirRoles(sala.jugadores);
 
     const nombres = sala.jugadores.map(j => j.nombre);
+    const indicesMafia = sala.jugadores
+      .map((jugador, indice) => (sala.roles.get(jugador.id) === 'mafia' ? indice : -1))
+      .filter(indice => indice !== -1);
 
     // Cada jugador recibe la mesa completa, pero solo su propio rol.
+    // Excepción: los de la Mafia se conocen entre ellos.
     sala.jugadores.forEach((jugador, indice) => {
+      const rol = sala.roles.get(jugador.id);
+
       io.to(jugador.id).emit('partida-iniciada', {
         nombreSala: sala.nombre,
         jugadores: nombres,
         tuIndice: indice,
-        tuRol: sala.roles.get(jugador.id)
+        tuRol: rol,
+        companerosMafia: rol === 'mafia'
+          ? indicesMafia.filter(otro => otro !== indice)
+          : []
       });
     });
 

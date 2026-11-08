@@ -149,7 +149,8 @@ document.querySelector('#app').innerHTML = `
       <p class="subtitulo">TU CARTA</p>
       <h3 id="mi-rol-nombre"></h3>
       <p id="mi-rol-texto"></p>
-      <p class="aviso-reglas">Solo tú puedes ver tu carta. Que nadie te descubra.</p>
+      <p id="mi-rol-companeros" class="mi-rol-companeros" hidden></p>
+      <p id="mi-rol-aviso" class="aviso-reglas"></p>
     </div>
     <button id="salir-partida" class="boton-secundario">Salir de la partida</button>
   </section>
@@ -348,9 +349,13 @@ function geometriaMesa() {
     const relativo = (indice - partida.tuIndice + total) % total
     const objetivo = (relativo * perimetro) / total
     const punto = puntos.find(p => p.recorrido >= objetivo) || puntos[0]
+    const soyYo = relativo === 0
+    const esCompanero = partida.companerosMafia.includes(indice)
     return {
       nombre,
-      soyYo: relativo === 0,
+      soyYo,
+      // Rol que este jugador puede ver en ese asiento (null = boca abajo).
+      rolVisible: soyYo ? partida.tuRol : (esCompanero ? 'mafia' : null),
       x: punto.x,
       y: punto.y
     }
@@ -364,14 +369,18 @@ function colocarCarta(carta, x, y, giro, escala = 1) {
     `translate(-50%, -50%) translate(${x}px, ${y}px) rotate(${giro}deg) scale(${escala})`
 }
 
-function crearCarta(rolPropio) {
+function crearCarta(asiento) {
+  const rol = asiento.rolVisible
   const carta = document.createElement('div')
   carta.className = 'carta'
+  const descripcion = asiento.soyYo
+    ? `Tu carta: ${rol && ROLES[rol].nombre}`
+    : `Carta de ${escaparHTML(asiento.nombre)}: ${rol && ROLES[rol].nombre}`
   carta.innerHTML = `
     <div class="carta-interior">
       <img class="carta-cara carta-reverso" src="${REVERSO}" alt="" draggable="false" />
-      ${rolPropio
-        ? `<img class="carta-cara carta-frente" src="/cartas/${rolPropio}.webp" alt="Tu carta: ${ROLES[rolPropio].nombre}" draggable="false" />`
+      ${rol
+        ? `<img class="carta-cara carta-frente" src="/cartas/${rol}.webp" alt="${descripcion}" draggable="false" />`
         : ''}
     </div>
   `
@@ -399,7 +408,7 @@ function dibujarMesa() {
   // Montón desordenado en el centro. La primera carta del montón
   // es la que se reparte primero (la de arriba).
   partida.cartas = partida.asientos.map((asiento, i) => {
-    const carta = crearCarta(asiento.soyYo ? partida.tuRol : null)
+    const carta = crearCarta(asiento)
     carta.style.zIndex = String(100 - i)
     const desorden = {
       x: (Math.random() - 0.5) * anchoCarta * 1.4,
@@ -410,6 +419,11 @@ function dibujarMesa() {
     mesa.appendChild(carta)
     return { carta, asiento, giroFinal: (Math.random() - 0.5) * 8 }
   })
+}
+
+function unirNombres(nombres) {
+  if (nombres.length <= 1) return nombres.join('')
+  return `${nombres.slice(0, -1).join(', ')} y ${nombres.at(-1)}`
 }
 
 function moverCartaAsiento({ carta, asiento, giroFinal }) {
@@ -436,8 +450,19 @@ async function repartirCartas() {
   await esperar(700)
   if (!partida || partida.id !== id) return
 
+  // Primero se gira la tuya y, si eres Mafia, después las de tus compañeros.
   const mia = partida.cartas.find(c => c.asiento.soyYo)
   mia.carta.classList.add('boca-arriba')
+
+  const companeros = partida.cartas.filter(c => !c.asiento.soyYo && c.asiento.rolVisible)
+  if (companeros.length) {
+    await esperar(900)
+    if (!partida || partida.id !== id) return
+    companeros.forEach(c => {
+      c.carta.classList.add('boca-arriba', 'carta-aliada')
+      c.asiento.etiqueta.classList.add('asiento-aliado')
+    })
+  }
   partida.repartido = true
 
   await esperar(700)
@@ -447,6 +472,15 @@ async function repartirCartas() {
   $('#mesa-estado').textContent = `Eres ${rol.articulo}.`
   $('#mi-rol-nombre').textContent = rol.nombre
   $('#mi-rol-texto').textContent = rol.texto
+
+  const nombresCompaneros = companeros.map(c => c.asiento.nombre)
+  $('#mi-rol-companeros').hidden = partida.tuRol !== 'mafia'
+  $('#mi-rol-companeros').textContent = nombresCompaneros.length
+    ? `Tus compañeros de la Mafia: ${unirNombres(nombresCompaneros)}. Solo vosotros os conocéis.`
+    : 'Eres la única Mafia de la mesa. Nadie más conoce tu secreto.'
+  $('#mi-rol-aviso').textContent = nombresCompaneros.length
+    ? 'Solo tu equipo puede ver tu carta. Que nadie os descubra.'
+    : 'Solo tú puedes ver tu carta. Que nadie te descubra.'
   $('#mi-rol').hidden = false
 }
 
@@ -484,6 +518,7 @@ socket.on('partida-iniciada', datos => {
     jugadores: datos.jugadores,
     tuIndice: datos.tuIndice,
     tuRol: datos.tuRol,
+    companerosMafia: Array.isArray(datos.companerosMafia) ? datos.companerosMafia : [],
     repartido: false
   }
 

@@ -787,3 +787,24 @@ h1 {
     transition-duration: 0.01s;
   }
 }
+
+/* Compañeros de la Mafia: solo los ve otro jugador de la Mafia */
+
+.carta.carta-aliada .carta-frente {
+  filter:
+    drop-shadow(0 0 9px #c0304fb0)
+    drop-shadow(0 6px 10px #000000b0);
+}
+
+.asiento-aliado span {
+  border-color: var(--burdeos-claro);
+  background: #3a0f1bee;
+  color: #f3d6dc;
+}
+
+.mi-rol-companeros {
+  padding: 10px 12px;
+  border-left: 2px solid var(--burdeos-claro);
+  background: #651b2b40;
+  text-align: left;
+}
