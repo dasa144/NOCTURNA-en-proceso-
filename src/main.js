@@ -136,11 +136,23 @@ document.querySelector('#app').innerHTML = `
     <button id="salir-espera" class="boton-secundario">Volver al menú</button>
   </section>
 
-  <section id="partida-en-preparacion" class="reglas" hidden>
-    <p class="subtitulo">EL DESTINO ESTÁ SELLADO</p>
-    <h2>Partida preparada</h2>
-    <p class="reglas-intro">La sala de espera funciona. El reparto de roles y las rondas se implementarán en el siguiente paso.</p>
-    <button id="volver-espera-partida" class="boton-volver">← Volver a la sala de espera</button>
+  <section id="partida-en-preparacion" class="pantalla-mesa" hidden>
+    <header class="mesa-cabecera">
+      <p class="subtitulo">EL DESTINO ESTÁ SELLADO</p>
+      <h2 id="mesa-nombre-sala"></h2>
+      <p id="mesa-estado" class="mesa-estado" aria-live="polite">Barajando las cartas…</p>
+    </header>
+    <div class="mesa-contenedor">
+      <div id="mesa" class="mesa" aria-label="Mesa de juego"></div>
+    </div>
+    <div id="mi-rol" class="mi-rol" hidden>
+      <p class="subtitulo">TU CARTA</p>
+      <h3 id="mi-rol-nombre"></h3>
+      <p id="mi-rol-texto"></p>
+      <p id="mi-rol-companeros" class="mi-rol-companeros" hidden></p>
+      <p id="mi-rol-aviso" class="aviso-reglas"></p>
+    </div>
+    <button id="salir-partida" class="boton-secundario">Salir de la partida</button>
   </section>
 `
 
@@ -262,9 +274,279 @@ socket.on('estado-sala', sala => {
   mostrarSala()
 })
 
-socket.on('partida-iniciada', () => {
+// ── La mesa: reparto de cartas ─────────────────────────────
+
+const ROLES = {
+  mafia: {
+    nombre: 'Mafia',
+    articulo: 'la Mafia',
+    texto: 'Actúa durante la noche y elimina a un jugador sin revelar tu identidad.'
+  },
+  doctor: {
+    nombre: 'Doctor',
+    articulo: 'el Doctor',
+    texto: 'Protege a una persona durante la noche. También puedes protegerte a ti mismo.'
+  },
+  detective: {
+    nombre: 'Detective',
+    articulo: 'el Detective',
+    texto: 'Investiga a una persona por ronda y recibe el resultado en privado.'
+  },
+  civil: {
+    nombre: 'Civil',
+    articulo: 'Civil',
+    texto: 'Debate, analiza las sospechas y vota para descubrir al culpable.'
+  }
+}
+
+const REVERSO = '/cartas/reverso.webp'
+
+let partida = null
+let temporizadoresMesa = []
+
+// El reparto se anima siempre, aunque el sistema tenga las animaciones
+// reducidas: es parte del juego, no un adorno.
+function esperar(ms) {
+  return new Promise(resolve => {
+    temporizadoresMesa.push(setTimeout(resolve, ms))
+  })
+}
+
+function cancelarAnimacionesMesa() {
+  temporizadoresMesa.forEach(clearTimeout)
+  temporizadoresMesa = []
+}
+
+// Posición de cada asiento alrededor de la mesa ovalada.
+// Tu asiento siempre queda abajo, en el centro: es tu punto de vista.
+function geometriaMesa() {
+  const mesa = $('#mesa')
+  const ancho = mesa.clientWidth
+  const alto = mesa.clientHeight
+  const total = partida.jugadores.length
+  // Óvalo por el que se reparten los asientos (algo dentro del borde).
+  const radioX = (ancho / 2) * 0.76
+  const radioY = (alto / 2) * 0.7
+
+  // Recorremos el óvalo en pasos pequeños, empezando abajo, para poder
+  // repartir los asientos a la misma distancia unos de otros.
+  const pasos = 720
+  const puntos = []
+  let perimetro = 0
+  for (let i = 0; i <= pasos; i++) {
+    const angulo = Math.PI / 2 + (i * 2 * Math.PI) / pasos
+    const punto = { x: Math.cos(angulo) * radioX, y: Math.sin(angulo) * radioY }
+    if (i > 0) {
+      const anterior = puntos[i - 1]
+      perimetro += Math.hypot(punto.x - anterior.x, punto.y - anterior.y)
+    }
+    puntos.push({ ...punto, recorrido: perimetro })
+  }
+
+  // Tamaño de carta según el hueco que hay entre asientos.
+  const anchoCarta = Math.max(28, Math.min(ancho * 0.13, (perimetro / total) * 0.55, 84))
+
+  const asientos = partida.jugadores.map((nombre, indice) => {
+    const relativo = (indice - partida.tuIndice + total) % total
+    const objetivo = (relativo * perimetro) / total
+    const punto = puntos.find(p => p.recorrido >= objetivo) || puntos[0]
+    const soyYo = relativo === 0
+    const esCompanero = partida.companerosMafia.includes(indice)
+    return {
+      nombre,
+      soyYo,
+      // Rol que este jugador puede ver en ese asiento (null = boca abajo).
+      rolVisible: soyYo ? partida.tuRol : (esCompanero ? 'mafia' : null),
+      x: punto.x,
+      y: punto.y
+    }
+  })
+
+  return { anchoCarta, asientos }
+}
+
+function colocarCarta(carta, x, y, giro, escala = 1) {
+  carta.style.transform =
+    `translate(-50%, -50%) translate(${x}px, ${y}px) rotate(${giro}deg) scale(${escala})`
+}
+
+function crearCarta(asiento) {
+  const rol = asiento.rolVisible
+  const carta = document.createElement('div')
+  carta.className = 'carta'
+  const descripcion = asiento.soyYo
+    ? `Tu carta: ${rol && ROLES[rol].nombre}`
+    : `Carta de ${escaparHTML(asiento.nombre)}: ${rol && ROLES[rol].nombre}`
+  carta.innerHTML = `
+    <div class="carta-interior">
+      <img class="carta-cara carta-reverso" src="${REVERSO}" alt="" draggable="false" />
+      ${rol
+        ? `<img class="carta-cara carta-frente" src="/cartas/${rol}.webp" alt="${descripcion}" draggable="false" />`
+        : ''}
+    </div>
+  `
+  return carta
+}
+
+function dibujarMesa() {
+  const mesa = $('#mesa')
+  const { anchoCarta, asientos } = geometriaMesa()
+  mesa.style.setProperty('--ancho-carta', `${anchoCarta}px`)
+
+  mesa.innerHTML = '<div class="tapete"></div>'
+
+  partida.asientos = asientos.map(asiento => {
+    const etiqueta = document.createElement('div')
+    etiqueta.className = 'asiento' + (asiento.soyYo ? ' asiento-propio' : '')
+    etiqueta.innerHTML = `<span>${escaparHTML(asiento.nombre)}${asiento.soyYo ? ' · Tú' : ''}</span>`
+    // El nombre va por debajo de la carta.
+    etiqueta.style.transform =
+      `translate(-50%, 0) translate(${asiento.x}px, ${asiento.y + anchoCarta * 0.72}px)`
+    mesa.appendChild(etiqueta)
+    return { ...asiento, etiqueta }
+  })
+
+  // Montón desordenado en el centro. La primera carta del montón
+  // es la que se reparte primero (la de arriba).
+  partida.cartas = partida.asientos.map((asiento, i) => {
+    const carta = crearCarta(asiento)
+    carta.style.zIndex = String(100 - i)
+    const elemento = { carta, asiento, giroFinal: (Math.random() - 0.5) * 8 }
+    desordenarEnMonton(elemento, anchoCarta)
+    mesa.appendChild(carta)
+    return elemento
+  })
+}
+
+// Coloca una carta en un sitio al azar del montón del centro.
+function desordenarEnMonton({ carta }, anchoCarta) {
+  colocarCarta(
+    carta,
+    (Math.random() - 0.5) * anchoCarta * 1.5,
+    (Math.random() - 0.5) * anchoCarta * 1.2,
+    (Math.random() - 0.5) * 170
+  )
+}
+
+function unirNombres(nombres) {
+  if (nombres.length <= 1) return nombres.join('')
+  return `${nombres.slice(0, -1).join(', ')} y ${nombres.at(-1)}`
+}
+
+function moverCartaAsiento({ carta, asiento, giroFinal }) {
+  colocarCarta(carta, asiento.x, asiento.y, giroFinal, asiento.soyYo ? 1.35 : 1)
+}
+
+async function repartirCartas() {
+  const id = partida.id
+  $('#mesa-estado').textContent = 'Barajando las cartas…'
+  await esperar(900)
+
+  // Se remueve el montón un par de veces, como si alguien barajara.
+  const anchoCarta = $('#mesa').querySelector('.carta')?.offsetWidth || 60
+  for (let vuelta = 0; vuelta < 3; vuelta++) {
+    if (!partida || partida.id !== id) return
+    partida.cartas.forEach(elemento => desordenarEnMonton(elemento, anchoCarta))
+    await esperar(650)
+  }
+  await esperar(500)
+
+  $('#mesa-estado').textContent = 'Repartiendo…'
+
+  for (const elemento of partida.cartas) {
+    if (!partida || partida.id !== id) return
+    elemento.carta.classList.add('en-movimiento')
+    elemento.carta.style.zIndex = '200'
+    moverCartaAsiento(elemento)
+    await esperar(520)
+    elemento.carta.style.zIndex = elemento.asiento.soyYo ? '150' : '50'
+    elemento.asiento.etiqueta.classList.add('visible')
+  }
+
+  await esperar(700)
+  if (!partida || partida.id !== id) return
+
+  // Primero se gira la tuya y, si eres Mafia, después las de tus compañeros.
+  const mia = partida.cartas.find(c => c.asiento.soyYo)
+  mia.carta.classList.add('boca-arriba')
+
+  const companeros = partida.cartas.filter(c => !c.asiento.soyYo && c.asiento.rolVisible)
+  if (companeros.length) {
+    await esperar(900)
+    if (!partida || partida.id !== id) return
+    companeros.forEach(c => {
+      c.carta.classList.add('boca-arriba', 'carta-aliada')
+      c.asiento.etiqueta.classList.add('asiento-aliado')
+    })
+  }
+  partida.repartido = true
+
+  await esperar(700)
+  if (!partida || partida.id !== id) return
+
+  const rol = ROLES[partida.tuRol]
+  $('#mesa-estado').textContent = `Eres ${rol.articulo}.`
+  $('#mi-rol-nombre').textContent = rol.nombre
+  $('#mi-rol-texto').textContent = rol.texto
+
+  const nombresCompaneros = companeros.map(c => c.asiento.nombre)
+  $('#mi-rol-companeros').hidden = partida.tuRol !== 'mafia'
+  $('#mi-rol-companeros').textContent = nombresCompaneros.length
+    ? `Tus compañeros de la Mafia: ${unirNombres(nombresCompaneros)}. Solo vosotros os conocéis.`
+    : 'Eres la única Mafia de la mesa. Nadie más conoce tu secreto.'
+  $('#mi-rol-aviso').textContent = nombresCompaneros.length
+    ? 'Solo tu equipo puede ver tu carta. Que nadie os descubra.'
+    : 'Solo tú puedes ver tu carta. Que nadie te descubra.'
+  $('#mi-rol').hidden = false
+}
+
+// Si cambia el tamaño de la ventana, recoloca todo sin animación.
+function recolocarMesa() {
+  if (!partida || partidaPreparada.hidden) return
+
+  const { anchoCarta, asientos } = geometriaMesa()
+  const mesa = $('#mesa')
+  mesa.style.setProperty('--ancho-carta', `${anchoCarta}px`)
+
+  partida.cartas.forEach((elemento, i) => {
+    const asiento = partida.asientos[i]
+    Object.assign(asiento, { x: asientos[i].x, y: asientos[i].y })
+    asiento.etiqueta.style.transform =
+      `translate(-50%, 0) translate(${asiento.x}px, ${asiento.y + anchoCarta * 0.72}px)`
+
+    if (elemento.carta.classList.contains('en-movimiento')) {
+      elemento.carta.classList.add('sin-transicion')
+      moverCartaAsiento(elemento)
+      void elemento.carta.offsetWidth
+      elemento.carta.classList.remove('sin-transicion')
+    }
+  })
+}
+
+window.addEventListener('resize', recolocarMesa)
+
+socket.on('partida-iniciada', datos => {
+  cancelarAnimacionesMesa()
   $('#mensaje').textContent = ''
+
+  partida = {
+    id: Date.now(),
+    jugadores: datos.jugadores,
+    tuIndice: datos.tuIndice,
+    tuRol: datos.tuRol,
+    companerosMafia: Array.isArray(datos.companerosMafia) ? datos.companerosMafia : [],
+    repartido: false
+  }
+
+  $('#mesa-nombre-sala').textContent = datos.nombreSala
+  $('#mi-rol').hidden = true
   mostrarPantalla(partidaPreparada)
+
+  // Esperar a que la pantalla tenga tamaño antes de calcular la mesa.
+  requestAnimationFrame(() => {
+    dibujarMesa()
+    repartirCartas()
+  })
 })
 
 botonReglas.addEventListener('click', () => mostrarPantalla(reglas))
@@ -459,8 +741,11 @@ $('#salir-espera').addEventListener('click', () => {
   mostrarPantalla(inicio)
 })
 
-$('#volver-espera-partida').addEventListener('click', () => {
-  mostrarPantalla(salaEspera)
-  if (estadoSala) mostrarSala()
+$('#salir-partida').addEventListener('click', () => {
+  cancelarAnimacionesMesa()
+  partida = null
+  $('#mesa').innerHTML = ''
+  salirDeSala()
+  mostrarPantalla(inicio)
 })
 

@@ -587,3 +587,233 @@ h1 {
 .resumen-partida strong {
   color: #e8d1a0;
 }
+
+/* ── MESA DE JUEGO ───────────────────────────────────────── */
+
+.pantalla-mesa {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  padding: 28px 16px 40px;
+  text-align: center;
+}
+
+.mesa-cabecera .subtitulo {
+  margin-bottom: 8px;
+}
+
+.mesa-cabecera h2 {
+  margin: 0;
+  color: #e8d1a0;
+  font-family: 'Cinzel', serif;
+  font-size: clamp(24px, 6vw, 36px);
+  font-weight: 500;
+  letter-spacing: 0.08em;
+}
+
+.mesa-estado {
+  min-height: 1.5em;
+  margin: 8px 0 0;
+  color: #d4c0c3;
+  font-family: 'Cormorant Garamond', serif;
+  font-size: 20px;
+  font-style: italic;
+}
+
+.mesa-contenedor {
+  width: min(100%, 760px);
+  padding: 6% 6% 8%;
+}
+
+.mesa {
+  --ancho-carta: 60px;
+  position: relative;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  perspective: 1200px;
+}
+
+.tapete {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background:
+    radial-gradient(ellipse at 50% 45%, #5a1a29 0%, #3a0f1b 55%, #22080f 100%);
+  border: 3px solid #c9a45c;
+  box-shadow:
+    0 0 0 8px #2a0d15,
+    0 0 0 9px #c9a45c60,
+    0 20px 60px #000000a0,
+    inset 0 0 50px #00000090;
+}
+
+.tapete::after {
+  content: '';
+  position: absolute;
+  inset: 9%;
+  border-radius: 50%;
+  border: 1px dashed #c9a45c35;
+}
+
+.carta {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: var(--ancho-carta);
+  aspect-ratio: 3 / 4;
+  transition: transform 0.55s cubic-bezier(0.22, 0.8, 0.3, 1);
+  will-change: transform;
+}
+
+.carta.sin-transicion {
+  transition: none;
+}
+
+.carta-interior {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  transform-style: preserve-3d;
+  transition: transform 0.7s ease;
+}
+
+.carta.boca-arriba .carta-interior {
+  transform: rotateY(180deg);
+}
+
+.carta-cara {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+  filter: drop-shadow(0 4px 6px #000000a0);
+  user-select: none;
+}
+
+.carta-frente {
+  transform: rotateY(180deg);
+}
+
+.carta.boca-arriba .carta-frente {
+  filter:
+    drop-shadow(0 0 10px #c9a45c90)
+    drop-shadow(0 6px 10px #000000b0);
+}
+
+.asiento {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  z-index: 160;
+  max-width: calc(var(--ancho-carta) * 2.2);
+  opacity: 0;
+  transition: opacity 0.3s ease;
+  pointer-events: none;
+}
+
+.asiento.visible {
+  opacity: 1;
+}
+
+.asiento span {
+  display: block;
+  overflow: hidden;
+  padding: 2px 8px;
+  border: 1px solid #c9a45c50;
+  border-radius: 3px;
+  background: #10090cd9;
+  color: #f3e9e7;
+  font-size: 12px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.asiento-propio span {
+  border-color: var(--dorado);
+  color: #e8d1a0;
+  font-weight: 600;
+}
+
+.mi-rol {
+  width: min(100%, 480px);
+  padding: 20px 18px;
+  border: 1px solid #c9a45c50;
+  background: #1b0b12cc;
+  animation: aparicion 0.6s ease both;
+}
+
+.mi-rol .subtitulo {
+  margin-bottom: 6px;
+}
+
+.mi-rol h3 {
+  margin: 0 0 8px;
+  color: #e8d1a0;
+  font-family: 'Cinzel', serif;
+  font-size: 28px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+}
+
+.mi-rol p {
+  margin: 0 0 10px;
+  color: #d4c0c3;
+  font-size: 16px;
+  line-height: 1.5;
+}
+
+@media (max-width: 600px) {
+  .mesa {
+    aspect-ratio: 3 / 4;
+  }
+
+  .mesa-contenedor {
+    padding: 10% 4% 18%;
+  }
+
+  .asiento span {
+    font-size: 11px;
+    padding: 2px 6px;
+  }
+}
+
+/* El reparto se ve siempre, aunque el sistema tenga las animaciones
+   desactivadas (la regla general de arriba las quitaba todas). */
+@media (prefers-reduced-motion: reduce) {
+  .carta {
+    transition-duration: 0.55s !important;
+  }
+
+  .carta-interior {
+    transition-duration: 0.7s !important;
+  }
+
+  .carta.sin-transicion {
+    transition-duration: 0s !important;
+  }
+}
+
+/* Compañeros de la Mafia: solo los ve otro jugador de la Mafia */
+
+.carta.carta-aliada .carta-frente {
+  filter:
+    drop-shadow(0 0 9px #c0304fb0)
+    drop-shadow(0 6px 10px #000000b0);
+}
+
+.asiento-aliado span {
+  border-color: var(--burdeos-claro);
+  background: #3a0f1bee;
+  color: #f3d6dc;
+}
+
+.mi-rol-companeros {
+  padding: 10px 12px;
+  border-left: 2px solid var(--burdeos-claro);
+  background: #651b2b40;
+  text-align: left;
+}
