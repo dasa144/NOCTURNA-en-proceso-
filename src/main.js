@@ -146,13 +146,22 @@ document.querySelector('#app').innerHTML = `
       <div id="mesa" class="mesa" aria-label="Mesa de juego"></div>
     </div>
     <div id="mi-rol" class="mi-rol" hidden>
-      <p class="subtitulo">TU CARTA</p>
-      <h3 id="mi-rol-nombre"></h3>
-      <p id="mi-rol-texto"></p>
-      <p id="mi-rol-companeros" class="mi-rol-companeros" hidden></p>
-      <p id="mi-rol-aviso" class="aviso-reglas"></p>
+      <button type="button" id="mi-rol-ver" class="mi-rol-carta" aria-label="Ver tu carta en grande">
+        <img id="mi-rol-imagen" alt="" draggable="false" />
+      </button>
+      <div class="mi-rol-info">
+        <p class="subtitulo">TU CARTA</p>
+        <h3 id="mi-rol-nombre"></h3>
+        <p id="mi-rol-texto"></p>
+        <p id="mi-rol-companeros" class="mi-rol-companeros" hidden></p>
+        <p id="mi-rol-aviso" class="aviso-reglas"></p>
+      </div>
     </div>
     <button id="salir-partida" class="boton-secundario">Salir de la partida</button>
+    <div id="carta-grande" class="carta-grande" hidden>
+      <img id="carta-grande-imagen" alt="" draggable="false" />
+      <p>Toca en cualquier sitio para cerrar</p>
+    </div>
   </section>
 `
 
@@ -344,7 +353,7 @@ function geometriaMesa() {
   }
 
   // Tamaño de carta según el hueco que hay entre asientos.
-  const anchoCarta = Math.max(28, Math.min(ancho * 0.13, (perimetro / total) * 0.55, 84))
+  const anchoCarta = Math.max(30, Math.min(ancho * 0.15, (perimetro / total) * 0.62, 130))
 
   const asientos = partida.jugadores.map((nombre, indice) => {
     const relativo = (indice - partida.tuIndice + total) % total
@@ -399,9 +408,7 @@ function dibujarMesa() {
     const etiqueta = document.createElement('div')
     etiqueta.className = 'asiento' + (asiento.soyYo ? ' asiento-propio' : '')
     etiqueta.innerHTML = `<span>${escaparHTML(asiento.nombre)}${asiento.soyYo ? ' · Tú' : ''}</span>`
-    // El nombre va por debajo de la carta.
-    etiqueta.style.transform =
-      `translate(-50%, 0) translate(${asiento.x}px, ${asiento.y + anchoCarta * 0.72}px)`
+    colocarEtiqueta(etiqueta, asiento, anchoCarta)
     mesa.appendChild(etiqueta)
     return { ...asiento, etiqueta }
   })
@@ -433,9 +440,37 @@ function unirNombres(nombres) {
   return `${nombres.slice(0, -1).join(', ')} y ${nombres.at(-1)}`
 }
 
+// Tu carta se ve más grande que las demás.
+const ESCALA_PROPIA = 1.5
+
 function moverCartaAsiento({ carta, asiento, giroFinal }) {
-  colocarCarta(carta, asiento.x, asiento.y, giroFinal, asiento.soyYo ? 1.35 : 1)
+  colocarCarta(carta, asiento.x, asiento.y, giroFinal, asiento.soyYo ? ESCALA_PROPIA : 1)
 }
+
+// El nombre va justo por debajo de la carta (la tuya es más alta).
+function colocarEtiqueta(etiqueta, asiento, anchoCarta) {
+  const escala = asiento.soyYo ? ESCALA_PROPIA : 1
+  const mitadAlto = (anchoCarta * 4 / 3 / 2) * escala
+  etiqueta.style.transform =
+    `translate(-50%, 0) translate(${asiento.x}px, ${asiento.y + mitadAlto - 6}px)`
+}
+
+function abrirCartaGrande() {
+  if (!partida?.repartido) return
+  $('#carta-grande-imagen').src = `/cartas/${partida.tuRol}.webp`
+  $('#carta-grande-imagen').alt = `Tu carta: ${ROLES[partida.tuRol].nombre}`
+  $('#carta-grande').hidden = false
+}
+
+$('#carta-grande').addEventListener('click', () => {
+  $('#carta-grande').hidden = true
+})
+
+document.addEventListener('keydown', evento => {
+  if (evento.key === 'Escape') $('#carta-grande').hidden = true
+})
+
+$('#mi-rol-ver').addEventListener('click', abrirCartaGrande)
 
 async function repartirCartas() {
   const id = partida.id
@@ -468,7 +503,9 @@ async function repartirCartas() {
 
   // Primero se gira la tuya y, si eres Mafia, después las de tus compañeros.
   const mia = partida.cartas.find(c => c.asiento.soyYo)
-  mia.carta.classList.add('boca-arriba')
+  mia.carta.classList.add('boca-arriba', 'carta-propia')
+  mia.carta.title = 'Toca para verla en grande'
+  mia.carta.addEventListener('click', abrirCartaGrande)
 
   const companeros = partida.cartas.filter(c => !c.asiento.soyYo && c.asiento.rolVisible)
   if (companeros.length) {
@@ -488,6 +525,8 @@ async function repartirCartas() {
   $('#mesa-estado').textContent = `Eres ${rol.articulo}.`
   $('#mi-rol-nombre').textContent = rol.nombre
   $('#mi-rol-texto').textContent = rol.texto
+  $('#mi-rol-imagen').src = `/cartas/${partida.tuRol}.webp`
+  $('#mi-rol-imagen').alt = `Tu carta: ${rol.nombre}`
 
   const nombresCompaneros = companeros.map(c => c.asiento.nombre)
   $('#mi-rol-companeros').hidden = partida.tuRol !== 'mafia'
@@ -511,8 +550,7 @@ function recolocarMesa() {
   partida.cartas.forEach((elemento, i) => {
     const asiento = partida.asientos[i]
     Object.assign(asiento, { x: asientos[i].x, y: asientos[i].y })
-    asiento.etiqueta.style.transform =
-      `translate(-50%, 0) translate(${asiento.x}px, ${asiento.y + anchoCarta * 0.72}px)`
+    colocarEtiqueta(asiento.etiqueta, asiento, anchoCarta)
 
     if (elemento.carta.classList.contains('en-movimiento')) {
       elemento.carta.classList.add('sin-transicion')
@@ -540,6 +578,7 @@ socket.on('partida-iniciada', datos => {
 
   $('#mesa-nombre-sala').textContent = datos.nombreSala
   $('#mi-rol').hidden = true
+  $('#carta-grande').hidden = true
   mostrarPantalla(partidaPreparada)
 
   // Esperar a que la pantalla tenga tamaño antes de calcular la mesa.
