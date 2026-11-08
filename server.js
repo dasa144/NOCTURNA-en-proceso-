@@ -46,6 +46,37 @@ function estadoSala(sala) {
   };
 }
 
+function numeroMafias(totalJugadores) {
+  if (totalJugadores >= 11) return 3;
+  if (totalJugadores >= 7) return 2;
+  return 1;
+}
+
+function barajar(lista) {
+  const copia = [...lista];
+
+  for (let i = copia.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [copia[i], copia[j]] = [copia[j], copia[i]];
+  }
+
+  return copia;
+}
+
+function repartirRoles(jugadores) {
+  const mafias = numeroMafias(jugadores.length);
+  const mazo = [
+    ...Array(mafias).fill('mafia'),
+    'doctor',
+    'detective'
+  ];
+
+  while (mazo.length < jugadores.length) mazo.push('civil');
+
+  const barajado = barajar(mazo);
+  return new Map(jugadores.map((jugador, i) => [jugador.id, barajado[i]]));
+}
+
 function actualizarSala(sala) {
   io.to(sala.codigo).emit('estado-sala', estadoSala(sala));
 }
@@ -163,8 +194,21 @@ io.on('connection', socket => {
     }
 
     sala.iniciada = true;
+    sala.roles = repartirRoles(sala.jugadores);
+
+    const nombres = sala.jugadores.map(j => j.nombre);
+
+    // Cada jugador recibe la mesa completa, pero solo su propio rol.
+    sala.jugadores.forEach((jugador, indice) => {
+      io.to(jugador.id).emit('partida-iniciada', {
+        nombreSala: sala.nombre,
+        jugadores: nombres,
+        tuIndice: indice,
+        tuRol: sala.roles.get(jugador.id)
+      });
+    });
+
     actualizarSala(sala);
-    io.to(sala.codigo).emit('partida-iniciada');
     responder({ ok: true });
   });
 
