@@ -84,7 +84,6 @@ io.on('connection', socket => {
     const anfitrion = String(datos?.anfitrion || datos?.nombre || '').trim().slice(0, 20);
     const nombre = String(datos?.nombreSala || datos?.nombre || '').trim().slice(0, 30);
     const maximo = Number(datos?.maximoJugadores || datos?.jugadores || 8);
-    const privacidad = datos?.privacidad === 'publica' ? 'publica' : 'privada';
 
     if (!anfitrion || !nombre) {
       return responder({ ok: false, error: 'Completa tu nombre y el de la sala.' });
@@ -98,7 +97,6 @@ io.on('connection', socket => {
     const sala = {
       codigo,
       nombre,
-      privacidad,
       maximoJugadores: maximo,
       anfitrionId: socket.id,
       jugadores: [{ id: socket.id, nombre: anfitrion }],

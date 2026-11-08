@@ -525,8 +525,7 @@ h1 {
   margin: 0 auto;
 }
 
-.form-partida > label,
-.privacidad legend {
+.form-partida > label {
   color: #e8d1a0;
   font-family: 'Cinzel', serif;
   font-size: 13px;
@@ -557,30 +556,6 @@ h1 {
   font-size: 12px;
 }
 
-.privacidad {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 22px;
-  margin: 18px 0;
-  padding: 18px;
-  border: 1px solid #c9a45c40;
-}
-
-.privacidad legend {
-  padding: 0 8px;
-}
-
-.privacidad label {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: #d4c0c3;
-  cursor: pointer;
-}
-
-.privacidad input {
-  accent-color: #8e293e;
-}
 
 .boton-secundario {
   display: block;

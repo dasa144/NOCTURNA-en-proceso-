@@ -78,11 +78,6 @@ document.querySelector('#app').innerHTML = `
         ).join('')}
       </select>
       <p class="ayuda-formulario">La partida admite entre 5 y 15 jugadores.</p>
-      <fieldset class="privacidad">
-        <legend>Privacidad de la sala</legend>
-        <label><input type="radio" name="privacidad" value="privada" checked /> Privada</label>
-        <label><input type="radio" name="privacidad" value="publica" /> Pública</label>
-      </fieldset>
       <button type="submit" class="boton-volver">Crear sala</button>
     </form>
     <button id="cancelar-crear" class="boton-secundario">← Volver al menú</button>
@@ -95,7 +90,6 @@ document.querySelector('#app').innerHTML = `
     <div class="resumen-partida">
       <p><strong>Anfitrión:</strong> <span id="resumen-anfitrion"></span></p>
       <p><strong>Jugadores máximos:</strong> <span id="resumen-jugadores"></span></p>
-      <p><strong>Privacidad:</strong> <span id="resumen-privacidad"></span></p>
       <p class="aviso-reglas">El código real de invitación se generará al crear la sala.</p>
     </div>
     <p id="mensaje-resumen" role="status" aria-live="polite"></p>
@@ -308,17 +302,14 @@ formulario.addEventListener('submit', evento => {
   const anfitrion = String(datos.get('nombre-jugador') || '').trim()
   const nombre = String(datos.get('nombre-sala') || '').trim()
   const jugadores = Number(datos.get('numero-jugadores'))
-  const privacidad = String(datos.get('privacidad') || 'privada')
 
   if (!anfitrion || !nombre) return
 
-  ultimaConfiguracion = { anfitrion, nombre, jugadores, privacidad }
+  ultimaConfiguracion = { anfitrion, nombre, jugadores }
 
   $('#resumen-nombre').textContent = nombre
   $('#resumen-anfitrion').textContent = anfitrion
   $('#resumen-jugadores').textContent = jugadores
-  $('#resumen-privacidad').textContent =
-    privacidad === 'privada' ? 'Privada' : 'Pública'
   $('#mensaje-resumen').textContent = ''
 
   mostrarPantalla(resumenPartida)
@@ -341,8 +332,7 @@ $('#ir-espera').addEventListener('click', () => {
   socket.emit('crear-sala', {
     anfitrion: ultimaConfiguracion.anfitrion,
     nombreSala: ultimaConfiguracion.nombre,
-    maximoJugadores: ultimaConfiguracion.jugadores,
-    privacidad: ultimaConfiguracion.privacidad
+    maximoJugadores: ultimaConfiguracion.jugadores
   }, respuesta => {
     creandoSala = false
     $('#ir-espera').disabled = false
@@ -367,11 +357,6 @@ $('#volver-configuracion').addEventListener('click', () => {
     $('#nombre-jugador').value = ultimaConfiguracion.anfitrion
     $('#nombre-sala').value = ultimaConfiguracion.nombre
     $('#numero-jugadores').value = String(ultimaConfiguracion.jugadores)
-
-    const opcion = formulario.querySelector(
-      `input[name="privacidad"][value="${ultimaConfiguracion.privacidad}"]`
-    )
-    if (opcion) opcion.checked = true
   }
 
   mostrarPantalla(crearPartida)
