@@ -81,6 +81,125 @@ function actualizarSala(sala) {
   io.to(sala.codigo).emit('estado-sala', estadoSala(sala));
 }
 
+// ── La noche ───────────────────────────────────────────────
+// Cada rol con habilidad elige en secreto. La noche termina cuando
+// todos han elegido o cuando se acaba el tiempo.
+
+const DURACION_NOCHE = 60_000;
+// Tiempo máximo que se espera a que todos terminen de ver el reparto.
+const ESPERA_REPARTO = 30_000;
+
+const enJuego = jugador => jugador.vivo && jugador.conectado;
+
+function rolDe(sala, jugador) {
+  return sala.roles.get(jugador.id);
+}
+
+// Quién tiene que actuar esta noche (vivos y conectados).
+function actoresNoche(sala) {
+  return sala.jugadores.filter(
+    j => enJuego(j) && ['mafia', 'doctor', 'detective'].includes(rolDe(sala, j))
+  );
+}
+
+// A quién puede señalar cada rol (índices de la mesa).
+function objetivosValidos(sala, jugador) {
+  const rol = rolDe(sala, jugador);
+
+  return sala.jugadores
+    .map((otro, indice) => ({ otro, indice }))
+    .filter(({ otro }) => enJuego(otro))
+    .filter(({ otro }) => {
+      if (rol === 'mafia') return rolDe(sala, otro) !== 'mafia';
+      if (rol === 'detective') return otro.id !== jugador.id;
+      return true; // El Doctor puede protegerse a sí mismo.
+    })
+    .map(({ indice }) => indice);
+}
+
+function enviarEleccionesMafia(sala) {
+  const elecciones = {};
+
+  sala.jugadores.forEach((jugador, indice) => {
+    if (rolDe(sala, jugador) !== 'mafia') return;
+    const eleccion = sala.noche.elecciones.get(jugador.id);
+    if (eleccion !== undefined) elecciones[indice] = eleccion;
+  });
+
+  sala.jugadores
+    .filter(j => rolDe(sala, j) === 'mafia' && j.conectado)
+    .forEach(j => io.to(j.id).emit('elecciones-mafia', elecciones));
+}
+
+function empezarNoche(sala) {
+  if (sala.fase !== 'reparto') return;
+
+  clearTimeout(sala.temporizador);
+  sala.fase = 'noche';
+  sala.ronda = (sala.ronda || 0) + 1;
+  sala.noche = { elecciones: new Map(), terminaEn: Date.now() + DURACION_NOCHE };
+
+  sala.jugadores.forEach(jugador => {
+    if (!jugador.conectado) return;
+
+    const puedeActuar = actoresNoche(sala).includes(jugador);
+
+    io.to(jugador.id).emit('fase-noche', {
+      ronda: sala.ronda,
+      duracion: DURACION_NOCHE,
+      objetivos: puedeActuar ? objetivosValidos(sala, jugador) : [],
+      vivos: sala.jugadores.map(j => j.vivo)
+    });
+  });
+
+  sala.temporizador = setTimeout(() => terminarNoche(sala), DURACION_NOCHE);
+}
+
+function comprobarFinNoche(sala) {
+  const faltan = actoresNoche(sala).some(j => !sala.noche.elecciones.has(j.id));
+  if (!faltan) terminarNoche(sala);
+}
+
+// La víctima es la más votada por la Mafia. Si empatan, decide el azar.
+function victimaMafia(sala) {
+  const votos = new Map();
+
+  sala.jugadores.forEach(jugador => {
+    if (rolDe(sala, jugador) !== 'mafia' || !enJuego(jugador)) return;
+    const eleccion = sala.noche.elecciones.get(jugador.id);
+    if (eleccion !== undefined) votos.set(eleccion, (votos.get(eleccion) || 0) + 1);
+  });
+
+  if (votos.size === 0) return null;
+
+  const maximo = Math.max(...votos.values());
+  const empatados = [...votos].filter(([, n]) => n === maximo).map(([indice]) => indice);
+  return empatados[Math.floor(Math.random() * empatados.length)];
+}
+
+function terminarNoche(sala) {
+  if (sala.fase !== 'noche') return;
+
+  clearTimeout(sala.temporizador);
+
+  const victima = victimaMafia(sala);
+  const doctor = sala.jugadores.find(j => rolDe(sala, j) === 'doctor' && enJuego(j));
+  const protegido = doctor ? sala.noche.elecciones.get(doctor.id) : undefined;
+  const muere = victima !== null && victima !== protegido && sala.jugadores[victima]?.vivo;
+
+  if (muere) sala.jugadores[victima].vivo = false;
+
+  sala.fase = 'dia';
+  sala.noche = null;
+
+  io.to(sala.codigo).emit('amanecer', {
+    ronda: sala.ronda,
+    muerto: muere ? victima : null,
+    rolMuerto: muere ? rolDe(sala, sala.jugadores[victima]) : null,
+    vivos: sala.jugadores.map(j => j.vivo)
+  });
+}
+
 function abandonarSala(socket) {
   const codigo = socket.data.codigoSala;
   if (!codigo) return;
@@ -89,6 +208,32 @@ function abandonarSala(socket) {
   const sala = salas.get(codigo);
 
   if (!sala) return;
+
+  // Con la partida empezada no se quita a nadie de la mesa (cambiarían
+  // los asientos de todos): solo se marca que se ha ido.
+  if (sala.iniciada) {
+    const indice = sala.jugadores.findIndex(j => j.id === socket.id);
+    if (indice === -1) return;
+
+    sala.jugadores[indice].conectado = false;
+    socket.leave(codigo);
+
+    if (!sala.jugadores.some(j => j.conectado)) {
+      clearTimeout(sala.temporizador);
+      salas.delete(codigo);
+      return;
+    }
+
+    if (sala.anfitrionId === socket.id) {
+      sala.anfitrionId = sala.jugadores.find(j => j.conectado).id;
+    }
+
+    io.to(codigo).emit('jugador-abandona', { indice });
+
+    if (sala.fase === 'reparto') comprobarFinReparto(sala);
+    if (sala.fase === 'noche') comprobarFinNoche(sala);
+    return;
+  }
 
   sala.jugadores = sala.jugadores.filter(j => j.id !== socket.id);
 
@@ -195,6 +340,13 @@ io.on('connection', socket => {
 
     sala.iniciada = true;
     sala.roles = repartirRoles(sala.jugadores);
+    sala.fase = 'reparto';
+    sala.vistoReparto = new Set();
+    sala.jugadores.forEach(j => {
+      j.vivo = true;
+      j.conectado = true;
+    });
+    sala.temporizador = setTimeout(() => empezarNoche(sala), ESPERA_REPARTO);
 
     const nombres = sala.jugadores.map(j => j.nombre);
     const indicesMafia = sala.jugadores
@@ -221,8 +373,62 @@ io.on('connection', socket => {
     responder({ ok: true });
   });
 
+  // Cada jugador avisa cuando ha terminado de ver el reparto.
+  socket.on('reparto-visto', () => {
+    const sala = salas.get(socket.data.codigoSala);
+    if (!sala || sala.fase !== 'reparto') return;
+
+    sala.vistoReparto.add(socket.id);
+    comprobarFinReparto(sala);
+  });
+
+  socket.on('accion-noche', (datos, callback) => {
+    const responder = typeof callback === 'function' ? callback : () => {};
+    const sala = salas.get(socket.data.codigoSala);
+
+    if (!sala || sala.fase !== 'noche') {
+      return responder({ ok: false, error: 'Ahora no es de noche.' });
+    }
+
+    const jugador = sala.jugadores.find(j => j.id === socket.id);
+
+    if (!jugador || !actoresNoche(sala).includes(jugador)) {
+      return responder({ ok: false, error: 'Esta noche no tienes nada que hacer.' });
+    }
+    if (sala.noche.elecciones.has(jugador.id)) {
+      return responder({ ok: false, error: 'Ya has elegido esta noche.' });
+    }
+
+    const objetivo = Number(datos?.objetivo);
+
+    if (!objetivosValidos(sala, jugador).includes(objetivo)) {
+      return responder({ ok: false, error: 'No puedes elegir a esa persona.' });
+    }
+
+    sala.noche.elecciones.set(jugador.id, objetivo);
+    const rol = rolDe(sala, jugador);
+
+    // El Detective recibe su respuesta en privado nada más elegir.
+    if (rol === 'detective') {
+      responder({
+        ok: true,
+        esMafia: rolDe(sala, sala.jugadores[objetivo]) === 'mafia'
+      });
+    } else {
+      responder({ ok: true });
+    }
+
+    if (rol === 'mafia') enviarEleccionesMafia(sala);
+    comprobarFinNoche(sala);
+  });
+
   socket.on('disconnect', () => abandonarSala(socket));
 });
+
+function comprobarFinReparto(sala) {
+  const faltan = sala.jugadores.some(j => j.conectado && !sala.vistoReparto.has(j.id));
+  if (!faltan) empezarNoche(sala);
+}
 
 if (process.env.NODE_ENV === 'production') {
   app.use(express.static(path.join(__dirname, 'dist')));

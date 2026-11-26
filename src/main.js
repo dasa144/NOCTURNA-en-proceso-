@@ -157,6 +157,15 @@ document.querySelector('#app').innerHTML = `
         <p id="mi-rol-aviso" class="aviso-reglas"></p>
       </div>
     </div>
+    <div id="panel-fase" class="panel-fase" hidden>
+      <p id="fase-subtitulo" class="subtitulo"></p>
+      <h3 id="fase-titulo"></h3>
+      <p id="fase-texto"></p>
+      <div id="fase-objetivos" class="fase-objetivos"></div>
+      <button type="button" id="fase-confirmar" class="boton-volver" hidden>Confirmar</button>
+      <p id="fase-resultado" class="fase-resultado" role="status" aria-live="polite" hidden></p>
+      <p id="fase-reloj" class="fase-reloj" aria-live="off"></p>
+    </div>
     <button id="salir-partida" class="boton-secundario">Salir de la partida</button>
     <div id="carta-grande" class="carta-grande" hidden>
       <img id="carta-grande-imagen" alt="" draggable="false" />
@@ -362,6 +371,7 @@ function geometriaMesa() {
     const soyYo = relativo === 0
     const esCompanero = partida.companerosMafia.includes(indice)
     return {
+      indice,
       nombre,
       soyYo,
       // Rol que este jugador puede ver en ese asiento (null = boca abajo).
@@ -537,7 +547,274 @@ async function repartirCartas() {
     ? 'Solo tu equipo puede ver tu carta. Que nadie os descubra.'
     : 'Solo tú puedes ver tu carta. Que nadie te descubra.'
   $('#mi-rol').hidden = false
+
+  // Unos segundos para leer tu carta y, después, cae la noche.
+  await esperar(4000)
+  if (!partida || partida.id !== id) return
+  partida.listo = true
+  socket.emit('reparto-visto')
+  if (partida.nochePendiente) empezarNoche(partida.nochePendiente)
 }
+
+// ── La noche ───────────────────────────────────────────────
+
+const ACCION_NOCHE = {
+  mafia: {
+    titulo: 'Elegid a vuestra víctima',
+    texto: 'Elige a quién eliminar esta noche. Si no os ponéis de acuerdo, morirá el más votado.',
+    boton: 'Eliminar'
+  },
+  doctor: {
+    titulo: '¿A quién proteges?',
+    texto: 'Si la Mafia ataca a esa persona esta noche, la salvarás. Puedes protegerte a ti mismo.',
+    boton: 'Proteger'
+  },
+  detective: {
+    titulo: '¿A quién investigas?',
+    texto: 'Descubrirás en secreto si esa persona es de la Mafia.',
+    boton: 'Investigar'
+  }
+}
+
+let relojNoche = null
+
+function pararReloj() {
+  clearInterval(relojNoche)
+  relojNoche = null
+  $('#fase-reloj').textContent = ''
+}
+
+function ponerReloj(duracion) {
+  pararReloj()
+  const fin = Date.now() + duracion
+  const pintar = () => {
+    const segundos = Math.max(0, Math.ceil((fin - Date.now()) / 1000))
+    $('#fase-reloj').textContent = `☾ La noche termina en ${segundos} s`
+    if (segundos === 0) pararReloj()
+  }
+  pintar()
+  relojNoche = setInterval(pintar, 250)
+}
+
+function asientoDe(indice) {
+  return partida.asientos.find(a => a.indice === indice)
+}
+
+function nombreDe(indice) {
+  const nombre = partida.jugadores[indice]
+  return indice === partida.tuIndice ? `${nombre} (tú)` : nombre
+}
+
+// Resalta en la mesa el asiento elegido.
+function marcarAsiento(indice, clase) {
+  partida.asientos.forEach(a => a.etiqueta.classList.remove(clase))
+  if (indice !== null && indice !== undefined) asientoDe(indice)?.etiqueta.classList.add(clase)
+}
+
+function pintarObjetivos() {
+  const noche = partida.noche
+  const accion = ACCION_NOCHE[partida.tuRol]
+  const contenedor = $('#fase-objetivos')
+
+  contenedor.innerHTML = noche.objetivos.map(indice => {
+    const marcado = noche.seleccion === indice
+    // Los de la Mafia ven a quién ha señalado cada compañero.
+    const quienes = Object.entries(noche.eleccionesMafia || {})
+      .filter(([, objetivo]) => objetivo === indice)
+      .map(([mafia]) => partida.jugadores[mafia])
+    return `
+      <button type="button" class="objetivo${marcado ? ' marcado' : ''}"
+        data-indice="${indice}" ${noche.confirmado ? 'disabled' : ''} aria-pressed="${marcado}">
+        <span>${escaparHTML(nombreDe(indice))}</span>
+        ${quienes.length ? `<small>☠ ${escaparHTML(unirNombres(quienes))}</small>` : ''}
+      </button>`
+  }).join('')
+
+  const confirmar = $('#fase-confirmar')
+  confirmar.hidden = noche.confirmado || noche.seleccion === null
+  if (noche.seleccion !== null) {
+    confirmar.textContent = `${accion.boton} a ${partida.jugadores[noche.seleccion]}`
+  }
+}
+
+$('#fase-objetivos').addEventListener('click', evento => {
+  const boton = evento.target.closest('.objetivo')
+  const noche = partida?.noche
+  if (!boton || !noche || noche.confirmado) return
+
+  noche.seleccion = Number(boton.dataset.indice)
+  marcarAsiento(noche.seleccion, 'asiento-elegido')
+  pintarObjetivos()
+})
+
+$('#fase-confirmar').addEventListener('click', () => {
+  const noche = partida?.noche
+  if (!noche || noche.confirmado || noche.seleccion === null) return
+
+  const confirmar = $('#fase-confirmar')
+  confirmar.disabled = true
+
+  socket.emit('accion-noche', { objetivo: noche.seleccion }, respuesta => {
+    confirmar.disabled = false
+    if (partida?.noche !== noche) return
+
+    const resultado = $('#fase-resultado')
+    resultado.hidden = false
+    resultado.classList.remove('es-mafia')
+
+    if (!respuesta?.ok) {
+      resultado.textContent = respuesta?.error || 'No se ha podido enviar tu elección.'
+      return
+    }
+
+    noche.confirmado = true
+    const nombre = partida.jugadores[noche.seleccion]
+
+    if (partida.tuRol === 'detective') {
+      resultado.textContent = respuesta.esMafia
+        ? `${nombre} ES de la Mafia. Guárdalo bien… o úsalo con cuidado.`
+        : `${nombre} no es de la Mafia.`
+      resultado.classList.toggle('es-mafia', respuesta.esMafia)
+    } else if (partida.tuRol === 'doctor') {
+      resultado.textContent = `Esta noche proteges a ${nombre}. Espera a que amanezca.`
+    } else {
+      resultado.textContent = partida.companerosMafia.length
+        ? `Has señalado a ${nombre}. Espera a tus compañeros.`
+        : `Has señalado a ${nombre}. Espera a que amanezca.`
+    }
+    pintarObjetivos()
+  })
+})
+
+function aplicarVivos(vivos) {
+  if (!Array.isArray(vivos)) return
+  vivos.forEach((vivo, indice) => {
+    if (!vivo) asientoDe(indice)?.etiqueta.classList.add('asiento-muerto')
+  })
+}
+
+function empezarNoche(datos) {
+  partida.nochePendiente = null
+  partida.vivos = datos.vivos
+  aplicarVivos(datos.vivos)
+
+  const vivo = datos.vivos?.[partida.tuIndice] !== false
+  const accion = ACCION_NOCHE[partida.tuRol]
+
+  partida.noche = {
+    objetivos: Array.isArray(datos.objetivos) ? datos.objetivos : [],
+    seleccion: null,
+    confirmado: false,
+    eleccionesMafia: {}
+  }
+
+  partidaPreparada.classList.add('es-noche')
+  $('#mi-rol').hidden = true
+  $('#mesa-estado').textContent = `Noche ${datos.ronda}. La ciudad duerme…`
+  $('#fase-subtitulo').textContent = `NOCHE ${datos.ronda}`
+  $('#fase-resultado').hidden = true
+  $('#fase-resultado').textContent = ''
+  $('#fase-objetivos').innerHTML = ''
+  $('#fase-confirmar').hidden = true
+
+  if (!vivo) {
+    $('#fase-titulo').textContent = 'Observas desde las sombras'
+    $('#fase-texto').textContent = 'Ya no puedes actuar, pero puedes seguir mirando la partida.'
+  } else if (accion && partida.noche.objetivos.length) {
+    $('#fase-titulo').textContent = accion.titulo
+    $('#fase-texto').textContent = accion.texto
+    pintarObjetivos()
+  } else {
+    $('#fase-titulo').textContent = 'Cierra los ojos'
+    $('#fase-texto').textContent =
+      'Mientras duermes, otros actúan en secreto. Espera a que amanezca.'
+  }
+
+  $('#panel-fase').hidden = false
+  ponerReloj(datos.duracion)
+  $('#panel-fase').scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+}
+
+socket.on('fase-noche', datos => {
+  if (!partida) return
+  // Si la noche llega antes de que acabe tu reparto, se guarda para luego.
+  if (!partida.listo) {
+    partida.nochePendiente = datos
+    return
+  }
+  empezarNoche(datos)
+})
+
+socket.on('elecciones-mafia', elecciones => {
+  if (!partida?.noche || partida.tuRol !== 'mafia') return
+  partida.noche.eleccionesMafia = elecciones || {}
+  pintarObjetivos()
+})
+
+// Pone boca arriba la carta de alguien que ha muerto.
+function revelarCarta(indice, rol) {
+  const elemento = partida.cartas.find(c => c.asiento.indice === indice)
+  if (!elemento || !ROLES[rol]) return
+
+  const interior = elemento.carta.querySelector('.carta-interior')
+  if (!interior.querySelector('.carta-frente')) {
+    interior.insertAdjacentHTML('beforeend',
+      `<img class="carta-cara carta-frente" src="/cartas/${rol}.webp" alt="Carta de ${escaparHTML(partida.jugadores[indice])}: ${ROLES[rol].nombre}" draggable="false" />`)
+  }
+  elemento.carta.classList.add('boca-arriba', 'carta-muerta')
+}
+
+socket.on('amanecer', datos => {
+  if (!partida) return
+  pararReloj()
+  partida.noche = null
+  partida.vivos = datos.vivos
+  partidaPreparada.classList.remove('es-noche')
+  marcarAsiento(null, 'asiento-elegido')
+
+  $('#fase-objetivos').innerHTML = ''
+  $('#fase-confirmar').hidden = true
+  $('#fase-subtitulo').textContent = `DÍA ${datos.ronda}`
+
+  if (datos.muerto === null || datos.muerto === undefined) {
+    $('#mesa-estado').textContent = 'Amanece. Todos siguen con vida.'
+    $('#fase-titulo').textContent = 'Nadie ha muerto esta noche'
+    $('#fase-texto').textContent = 'La ciudad despierta entera… por ahora.'
+  } else {
+    const nombre = partida.jugadores[datos.muerto]
+    const rol = ROLES[datos.rolMuerto]
+    const soyYo = datos.muerto === partida.tuIndice
+    revelarCarta(datos.muerto, datos.rolMuerto)
+    $('#mesa-estado').textContent = `Amanece. ${nombre} no ha despertado.`
+    $('#fase-titulo').textContent = soyYo ? 'La Mafia te ha eliminado' : `${nombre} ha sido asesinado`
+    $('#fase-texto').textContent = soyYo
+      ? `Ya no puedes actuar, pero puedes seguir mirando la partida. Eras ${rol?.articulo}.`
+      : `Su carta se ha revelado: era ${rol?.articulo}.`
+  }
+  aplicarVivos(datos.vivos)
+
+  $('#fase-resultado').hidden = false
+  $('#fase-resultado').classList.remove('es-mafia')
+  $('#fase-resultado').textContent = 'El debate y la votación del día llegarán pronto.'
+  $('#panel-fase').hidden = false
+})
+
+socket.on('jugador-abandona', ({ indice }) => {
+  if (!partida?.asientos) return
+  asientoDe(indice)?.etiqueta.classList.add('asiento-ausente')
+
+  if (partida.noche) {
+    const posicion = partida.noche.objetivos.indexOf(indice)
+    if (posicion !== -1) {
+      partida.noche.objetivos.splice(posicion, 1)
+      if (partida.noche.seleccion === indice) {
+        partida.noche.seleccion = null
+        marcarAsiento(null, 'asiento-elegido')
+      }
+      if (!partida.noche.confirmado) pintarObjetivos()
+    }
+  }
+})
 
 // Si cambia el tamaño de la ventana, recoloca todo sin animación.
 function recolocarMesa() {
@@ -579,6 +856,9 @@ socket.on('partida-iniciada', datos => {
   $('#mesa-nombre-sala').textContent = datos.nombreSala
   $('#mi-rol').hidden = true
   $('#carta-grande').hidden = true
+  $('#panel-fase').hidden = true
+  pararReloj()
+  partidaPreparada.classList.remove('es-noche')
   mostrarPantalla(partidaPreparada)
 
   // Esperar a que la pantalla tenga tamaño antes de calcular la mesa.
@@ -782,8 +1062,11 @@ $('#salir-espera').addEventListener('click', () => {
 
 $('#salir-partida').addEventListener('click', () => {
   cancelarAnimacionesMesa()
+  pararReloj()
   partida = null
   $('#mesa').innerHTML = ''
+  $('#panel-fase').hidden = true
+  partidaPreparada.classList.remove('es-noche')
   salirDeSala()
   mostrarPantalla(inicio)
 })
