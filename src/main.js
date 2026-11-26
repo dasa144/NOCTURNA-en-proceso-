@@ -55,10 +55,14 @@ document.querySelector('#app').innerHTML = `
       </article>
     </div>
     <h3 class="titulo-seccion">EL DESARROLLO DE LA PARTIDA</h3>
-    <article class="regla"><span class="numero-regla">I</span><div><h3>La noche</h3><p>Los roles con habilidades nocturnas realizan sus acciones secretamente.</p></div></article>
-    <article class="regla"><span class="numero-regla">II</span><div><h3>El día</h3><p>Los jugadores debaten, comparten sospechas y tratan de descubrir quién es la Mafia.</p></div></article>
-    <article class="regla"><span class="numero-regla">III</span><div><h3>La votación</h3><p>Los jugadores votan para señalar al sospechoso que consideran culpable.</p></div></article>
-    <p class="aviso-reglas">Los detalles de las rondas y las condiciones de victoria se concretarán al desarrollar las mecánicas del juego.</p>
+    <article class="regla"><span class="numero-regla">I</span><div><h3>La noche</h3><p>La Mafia elige a quién eliminar, el Doctor a quién proteger y el Detective a quién investigar. Todo en secreto y con un minuto de tiempo.</p></div></article>
+    <article class="regla"><span class="numero-regla">II</span><div><h3>El amanecer</h3><p>Se anuncia quién ha muerto y se revela su carta. Si el Doctor protegió a la víctima, nadie muere.</p></div></article>
+    <article class="regla"><span class="numero-regla">III</span><div><h3>El debate</h3><p>Los vivos hablan, comparten sospechas y tratan de descubrir quién es la Mafia.</p></div></article>
+    <article class="regla"><span class="numero-regla">IV</span><div><h3>La votación</h3><p>Cada vivo vota a quién expulsar; los votos se ven. El más votado sale y se revela su carta. Si hay empate, no sale nadie. Después vuelve a caer la noche.</p></div></article>
+    <h3 class="titulo-seccion">CÓMO SE GANA</h3>
+    <article class="regla"><span class="numero-regla">◈</span><div><h3>El pueblo</h3><p>Gana cuando no queda nadie de la Mafia.</p></div></article>
+    <article class="regla"><span class="numero-regla">♠</span><div><h3>La Mafia</h3><p>Gana cuando son tantos como el resto de jugadores vivos.</p></div></article>
+    <p class="aviso-reglas">Los muertos y expulsados pueden seguir mirando, pero ya no actúan ni votan.</p>
     <button id="volver-inicio" class="boton-volver">← Volver al menú</button>
   </section>
 
@@ -165,6 +169,11 @@ document.querySelector('#app').innerHTML = `
       <button type="button" id="fase-confirmar" class="boton-volver" hidden>Confirmar</button>
       <p id="fase-resultado" class="fase-resultado" role="status" aria-live="polite" hidden></p>
       <p id="fase-reloj" class="fase-reloj" aria-live="off"></p>
+      <button type="button" id="fase-saltar" class="boton-secundario" hidden>Pasar ya a la votación</button>
+      <p id="fase-notas" class="fase-notas" hidden></p>
+      <div id="fase-final" class="fase-final" hidden>
+        <button type="button" id="volver-sala" class="boton-volver">Volver a la sala</button>
+      </div>
     </div>
     <button id="salir-partida" class="boton-secundario">Salir de la partida</button>
     <div id="carta-grande" class="carta-grande" hidden>
@@ -229,7 +238,33 @@ function limpiarSalaLocal() {
 
 function salirDeSala() {
   if (codigoSala) socket.emit('salir-sala')
+  borrarSesion()
   limpiarSalaLocal()
+}
+
+// Se guarda la sala y tu clave para volver a tu sitio si se corta la
+// conexión (p. ej. si se bloquea el móvil) o si recargas la página.
+const CLAVE_SESION = 'nocturna-sesion'
+
+function guardarSesion(codigo, clave) {
+  if (!clave) return
+  try {
+    localStorage.setItem(CLAVE_SESION, JSON.stringify({ codigo, clave }))
+  } catch {}
+}
+
+function leerSesion() {
+  try {
+    return JSON.parse(localStorage.getItem(CLAVE_SESION)) || null
+  } catch {
+    return null
+  }
+}
+
+function borrarSesion() {
+  try {
+    localStorage.removeItem(CLAVE_SESION)
+  } catch {}
 }
 
 function mostrarSala() {
@@ -276,6 +311,39 @@ function mostrarErrorSala(texto) {
 
 socket.on('connect', () => {
   mensaje.textContent = ''
+  const sesion = leerSesion()
+  if (!sesion) return
+
+  socket.emit('volver-partida', sesion, respuesta => {
+    if (respuesta?.ok) {
+      codigoSala = sesion.codigo
+      nombreJugador = respuesta.nombre
+      if (respuesta.enEspera) {
+        // Si la partida acabó mientras no estabas, vuelves a la sala.
+        const seAcabo = Boolean(partida)
+        if (seAcabo) cerrarMesa()
+        mostrarPantalla(salaEspera)
+        if (estadoSala) mostrarSala()
+        if (seAcabo) $('#mensaje-espera').textContent = 'La partida terminó mientras estabas desconectado.'
+      }
+      return
+    }
+
+    // Ya no hay sitio al que volver.
+    borrarSesion()
+    const estabaDentro = Boolean(partida) || !salaEspera.hidden
+    if (!estabaDentro) return
+    cerrarMesa()
+    limpiarSalaLocal()
+    mostrarPantalla(inicio)
+    mensaje.textContent = 'Se perdió la conexión y ya no puedes volver a esa sala.'
+  })
+})
+
+socket.on('disconnect', () => {
+  const aviso = 'Se ha cortado la conexión. Reconectando…'
+  if (partida) $('#mesa-estado').textContent = aviso
+  else if (!salaEspera.hidden) $('#mensaje-espera').textContent = aviso
 })
 
 socket.on('connect_error', () => {
@@ -531,22 +599,7 @@ async function repartirCartas() {
   await esperar(700)
   if (!partida || partida.id !== id) return
 
-  const rol = ROLES[partida.tuRol]
-  $('#mesa-estado').textContent = `Eres ${rol.articulo}.`
-  $('#mi-rol-nombre').textContent = rol.nombre
-  $('#mi-rol-texto').textContent = rol.texto
-  $('#mi-rol-imagen').src = `/cartas/${partida.tuRol}.webp`
-  $('#mi-rol-imagen').alt = `Tu carta: ${rol.nombre}`
-
-  const nombresCompaneros = companeros.map(c => c.asiento.nombre)
-  $('#mi-rol-companeros').hidden = partida.tuRol !== 'mafia'
-  $('#mi-rol-companeros').textContent = nombresCompaneros.length
-    ? `Tus compañeros de la Mafia: ${unirNombres(nombresCompaneros)}. Solo vosotros os conocéis.`
-    : 'Eres la única Mafia de la mesa. Nadie más conoce tu secreto.'
-  $('#mi-rol-aviso').textContent = nombresCompaneros.length
-    ? 'Solo tu equipo puede ver tu carta. Que nadie os descubra.'
-    : 'Solo tú puedes ver tu carta. Que nadie te descubra.'
-  $('#mi-rol').hidden = false
+  mostrarMiRol()
 
   // Unos segundos para leer tu carta y, después, cae la noche.
   await esperar(4000)
@@ -556,44 +609,66 @@ async function repartirCartas() {
   if (partida.nochePendiente) empezarNoche(partida.nochePendiente)
 }
 
-// ── La noche ───────────────────────────────────────────────
+// El recuadro con tu carta y lo que hace tu rol.
+function mostrarMiRol() {
+  const rol = ROLES[partida.tuRol]
+  $('#mesa-estado').textContent = `Eres ${rol.articulo}.`
+  $('#mi-rol-nombre').textContent = rol.nombre
+  $('#mi-rol-texto').textContent = rol.texto
+  $('#mi-rol-imagen').src = `/cartas/${partida.tuRol}.webp`
+  $('#mi-rol-imagen').alt = `Tu carta: ${rol.nombre}`
+
+  const nombresCompaneros = partida.companerosMafia.map(indice => partida.jugadores[indice])
+  $('#mi-rol-companeros').hidden = partida.tuRol !== 'mafia'
+  $('#mi-rol-companeros').textContent = nombresCompaneros.length
+    ? `Tus compañeros de la Mafia: ${unirNombres(nombresCompaneros)}. Solo vosotros os conocéis.`
+    : 'Eres la única Mafia de la mesa. Nadie más conoce tu secreto.'
+  $('#mi-rol-aviso').textContent = nombresCompaneros.length
+    ? 'Solo tu equipo puede ver tu carta. Que nadie os descubra.'
+    : 'Solo tú puedes ver tu carta. Que nadie te descubra.'
+  $('#mi-rol').hidden = false
+}
+
+// ── Noche, día y votación ──────────────────────────────────
+// Las tres fases usan el mismo panel debajo de la mesa: un título,
+// un texto, una lista de nombres para elegir y una cuenta atrás.
 
 const ACCION_NOCHE = {
   mafia: {
     titulo: 'Elegid a vuestra víctima',
     texto: 'Elige a quién eliminar esta noche. Si no os ponéis de acuerdo, morirá el más votado.',
-    boton: 'Eliminar'
+    boton: 'Eliminar a'
   },
   doctor: {
     titulo: '¿A quién proteges?',
     texto: 'Si la Mafia ataca a esa persona esta noche, la salvarás. Puedes protegerte a ti mismo.',
-    boton: 'Proteger'
+    boton: 'Proteger a'
   },
   detective: {
     titulo: '¿A quién investigas?',
     texto: 'Descubrirás en secreto si esa persona es de la Mafia.',
-    boton: 'Investigar'
+    boton: 'Investigar a'
   }
 }
 
-let relojNoche = null
+let relojFase = null
 
 function pararReloj() {
-  clearInterval(relojNoche)
-  relojNoche = null
+  clearInterval(relojFase)
+  relojFase = null
   $('#fase-reloj').textContent = ''
 }
 
-function ponerReloj(duracion) {
+function ponerReloj(duracion, texto) {
   pararReloj()
   const fin = Date.now() + duracion
   const pintar = () => {
     const segundos = Math.max(0, Math.ceil((fin - Date.now()) / 1000))
-    $('#fase-reloj').textContent = `☾ La noche termina en ${segundos} s`
+    $('#fase-reloj').textContent = `${texto} ${segundos} s`
     if (segundos === 0) pararReloj()
   }
   pintar()
-  relojNoche = setInterval(pintar, 250)
+  relojFase = setInterval(pintar, 250)
 }
 
 function asientoDe(indice) {
@@ -605,82 +680,149 @@ function nombreDe(indice) {
   return indice === partida.tuIndice ? `${nombre} (tú)` : nombre
 }
 
+const sigoVivo = () => partida.vivos?.[partida.tuIndice] !== false
+
 // Resalta en la mesa el asiento elegido.
 function marcarAsiento(indice, clase) {
   partida.asientos.forEach(a => a.etiqueta.classList.remove(clase))
   if (indice !== null && indice !== undefined) asientoDe(indice)?.etiqueta.classList.add(clase)
 }
 
-function pintarObjetivos() {
-  const noche = partida.noche
-  const accion = ACCION_NOCHE[partida.tuRol]
-  const contenedor = $('#fase-objetivos')
+// Votos que lleva cada asiento, encima de su nombre.
+function pintarVotosMesa(votos) {
+  const cuenta = {}
+  Object.values(votos || {}).forEach(objetivo => {
+    if (objetivo !== -1) cuenta[objetivo] = (cuenta[objetivo] || 0) + 1
+  })
+  partida.asientos.forEach(asiento => {
+    const n = cuenta[asiento.indice]
+    if (n) asiento.etiqueta.dataset.votos = n === 1 ? '1 voto' : `${n} votos`
+    else delete asiento.etiqueta.dataset.votos
+  })
+}
 
-  contenedor.innerHTML = noche.objetivos.map(indice => {
-    const marcado = noche.seleccion === indice
-    // Los de la Mafia ven a quién ha señalado cada compañero.
-    const quienes = Object.entries(noche.eleccionesMafia || {})
-      .filter(([, objetivo]) => objetivo === indice)
-      .map(([mafia]) => partida.jugadores[mafia])
+function textoTitulo(titulo, texto) {
+  $('#fase-titulo').textContent = titulo
+  $('#fase-texto').textContent = texto
+}
+
+function limpiarPanel() {
+  partida.eleccion = null
+  marcarAsiento(null, 'asiento-elegido')
+  $('#fase-objetivos').innerHTML = ''
+  $('#fase-confirmar').hidden = true
+  $('#fase-saltar').hidden = true
+  $('#fase-final').hidden = true
+  $('#fase-resultado').hidden = true
+  $('#fase-resultado').textContent = ''
+  $('#fase-resultado').classList.remove('es-mafia')
+}
+
+function mostrarResultado(texto, esMafia = false) {
+  const resultado = $('#fase-resultado')
+  resultado.textContent = texto
+  resultado.classList.toggle('es-mafia', esMafia)
+  resultado.hidden = false
+}
+
+// El Detective lleva apuntado lo que ha ido descubriendo.
+function pintarNotas() {
+  const notas = $('#fase-notas')
+  const lista = partida.investigaciones || []
+  notas.hidden = partida.tuRol !== 'detective' || !lista.length
+  notas.innerHTML = lista.length
+    ? `<strong>Tus investigaciones:</strong> ${lista.map(({ indice, esMafia }) =>
+      `${escaparHTML(partida.jugadores[indice])} — <span class="${esMafia ? 'nota-mafia' : ''}">${esMafia ? 'Mafia' : 'no es Mafia'}</span>`
+    ).join(' · ')}`
+    : ''
+}
+
+function mostrarPanel() {
+  pintarNotas()
+  $('#panel-fase').hidden = false
+  $('#panel-fase').scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+}
+
+function pintarObjetivos() {
+  const eleccion = partida.eleccion
+  if (!eleccion) return
+
+  const nombresQue = indice => Object.entries(eleccion.anotaciones || {})
+    .filter(([, objetivo]) => objetivo === indice)
+    .map(([quien]) => partida.jugadores[quien])
+
+  const boton = (indice, etiqueta) => {
+    const marcado = eleccion.seleccion === indice
+    const quienes = nombresQue(indice)
+    const icono = eleccion.tipo === 'noche' ? '☠' : '✋'
     return `
-      <button type="button" class="objetivo${marcado ? ' marcado' : ''}"
-        data-indice="${indice}" ${noche.confirmado ? 'disabled' : ''} aria-pressed="${marcado}">
-        <span>${escaparHTML(nombreDe(indice))}</span>
-        ${quienes.length ? `<small>☠ ${escaparHTML(unirNombres(quienes))}</small>` : ''}
+      <button type="button" class="objetivo${marcado ? ' marcado' : ''}${indice === -1 ? ' objetivo-nadie' : ''}"
+        data-indice="${indice}" ${eleccion.confirmado ? 'disabled' : ''} aria-pressed="${marcado}">
+        <span>${escaparHTML(etiqueta)}</span>
+        ${quienes.length ? `<small>${icono} ${escaparHTML(unirNombres(quienes))}</small>` : ''}
       </button>`
-  }).join('')
+  }
+
+  $('#fase-objetivos').innerHTML =
+    eleccion.objetivos.map(indice => boton(indice, nombreDe(indice))).join('') +
+    (eleccion.tipo === 'votacion' ? boton(-1, 'No votar a nadie') : '')
 
   const confirmar = $('#fase-confirmar')
-  confirmar.hidden = noche.confirmado || noche.seleccion === null
-  if (noche.seleccion !== null) {
-    confirmar.textContent = `${accion.boton} a ${partida.jugadores[noche.seleccion]}`
+  confirmar.hidden = eleccion.confirmado || eleccion.seleccion === null
+  if (eleccion.seleccion === -1) {
+    confirmar.textContent = 'No votar a nadie'
+  } else if (eleccion.seleccion !== null) {
+    const verbo = eleccion.tipo === 'noche' ? ACCION_NOCHE[partida.tuRol].boton : 'Votar a'
+    confirmar.textContent = `${verbo} ${partida.jugadores[eleccion.seleccion]}`
   }
 }
 
 $('#fase-objetivos').addEventListener('click', evento => {
   const boton = evento.target.closest('.objetivo')
-  const noche = partida?.noche
-  if (!boton || !noche || noche.confirmado) return
+  const eleccion = partida?.eleccion
+  if (!boton || !eleccion || eleccion.confirmado) return
 
-  noche.seleccion = Number(boton.dataset.indice)
-  marcarAsiento(noche.seleccion, 'asiento-elegido')
+  eleccion.seleccion = Number(boton.dataset.indice)
+  marcarAsiento(eleccion.seleccion === -1 ? null : eleccion.seleccion, 'asiento-elegido')
   pintarObjetivos()
 })
 
 $('#fase-confirmar').addEventListener('click', () => {
-  const noche = partida?.noche
-  if (!noche || noche.confirmado || noche.seleccion === null) return
+  const eleccion = partida?.eleccion
+  if (!eleccion || eleccion.confirmado || eleccion.seleccion === null) return
 
   const confirmar = $('#fase-confirmar')
   confirmar.disabled = true
+  const evento = eleccion.tipo === 'noche' ? 'accion-noche' : 'votar'
 
-  socket.emit('accion-noche', { objetivo: noche.seleccion }, respuesta => {
+  socket.emit(evento, { objetivo: eleccion.seleccion }, respuesta => {
     confirmar.disabled = false
-    if (partida?.noche !== noche) return
-
-    const resultado = $('#fase-resultado')
-    resultado.hidden = false
-    resultado.classList.remove('es-mafia')
+    if (partida?.eleccion !== eleccion) return
 
     if (!respuesta?.ok) {
-      resultado.textContent = respuesta?.error || 'No se ha podido enviar tu elección.'
+      mostrarResultado(respuesta?.error || 'No se ha podido enviar tu elección.')
       return
     }
 
-    noche.confirmado = true
-    const nombre = partida.jugadores[noche.seleccion]
+    eleccion.confirmado = true
+    const nombre = partida.jugadores[eleccion.seleccion]
 
-    if (partida.tuRol === 'detective') {
-      resultado.textContent = respuesta.esMafia
+    if (eleccion.tipo === 'votacion') {
+      mostrarResultado(eleccion.seleccion === -1
+        ? 'No has votado a nadie. Espera al recuento.'
+        : `Has votado a ${nombre}. Espera al recuento.`)
+    } else if (partida.tuRol === 'detective') {
+      partida.investigaciones.push({ indice: eleccion.seleccion, esMafia: respuesta.esMafia })
+      mostrarResultado(respuesta.esMafia
         ? `${nombre} ES de la Mafia. Guárdalo bien… o úsalo con cuidado.`
-        : `${nombre} no es de la Mafia.`
-      resultado.classList.toggle('es-mafia', respuesta.esMafia)
+        : `${nombre} no es de la Mafia.`, respuesta.esMafia)
+      pintarNotas()
     } else if (partida.tuRol === 'doctor') {
-      resultado.textContent = `Esta noche proteges a ${nombre}. Espera a que amanezca.`
+      mostrarResultado(`Esta noche proteges a ${nombre}. Espera a que amanezca.`)
     } else {
-      resultado.textContent = partida.companerosMafia.length
+      mostrarResultado(partida.companerosMafia.length
         ? `Has señalado a ${nombre}. Espera a tus compañeros.`
-        : `Has señalado a ${nombre}. Espera a que amanezca.`
+        : `Has señalado a ${nombre}. Espera a que amanezca.`)
     }
     pintarObjetivos()
   })
@@ -688,51 +830,40 @@ $('#fase-confirmar').addEventListener('click', () => {
 
 function aplicarVivos(vivos) {
   if (!Array.isArray(vivos)) return
+  partida.vivos = vivos
   vivos.forEach((vivo, indice) => {
     if (!vivo) asientoDe(indice)?.etiqueta.classList.add('asiento-muerto')
   })
 }
 
+// ── La noche ──
+
 function empezarNoche(datos) {
   partida.nochePendiente = null
-  partida.vivos = datos.vivos
   aplicarVivos(datos.vivos)
+  limpiarPanel()
+  pintarVotosMesa(null)
 
-  const vivo = datos.vivos?.[partida.tuIndice] !== false
   const accion = ACCION_NOCHE[partida.tuRol]
-
-  partida.noche = {
-    objetivos: Array.isArray(datos.objetivos) ? datos.objetivos : [],
-    seleccion: null,
-    confirmado: false,
-    eleccionesMafia: {}
-  }
+  const objetivos = Array.isArray(datos.objetivos) ? datos.objetivos : []
 
   partidaPreparada.classList.add('es-noche')
   $('#mi-rol').hidden = true
   $('#mesa-estado').textContent = `Noche ${datos.ronda}. La ciudad duerme…`
   $('#fase-subtitulo').textContent = `NOCHE ${datos.ronda}`
-  $('#fase-resultado').hidden = true
-  $('#fase-resultado').textContent = ''
-  $('#fase-objetivos').innerHTML = ''
-  $('#fase-confirmar').hidden = true
 
-  if (!vivo) {
-    $('#fase-titulo').textContent = 'Observas desde las sombras'
-    $('#fase-texto').textContent = 'Ya no puedes actuar, pero puedes seguir mirando la partida.'
-  } else if (accion && partida.noche.objetivos.length) {
-    $('#fase-titulo').textContent = accion.titulo
-    $('#fase-texto').textContent = accion.texto
+  if (!sigoVivo()) {
+    textoTitulo('Observas desde las sombras', 'Ya no puedes actuar, pero puedes seguir mirando la partida.')
+  } else if (accion && objetivos.length) {
+    textoTitulo(accion.titulo, accion.texto)
+    partida.eleccion = { tipo: 'noche', objetivos, seleccion: null, confirmado: false, anotaciones: {} }
     pintarObjetivos()
   } else {
-    $('#fase-titulo').textContent = 'Cierra los ojos'
-    $('#fase-texto').textContent =
-      'Mientras duermes, otros actúan en secreto. Espera a que amanezca.'
+    textoTitulo('Cierra los ojos', 'Mientras duermes, otros actúan en secreto. Espera a que amanezca.')
   }
 
-  $('#panel-fase').hidden = false
-  ponerReloj(datos.duracion)
-  $('#panel-fase').scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+  ponerReloj(datos.duracion, '☾ La noche termina en')
+  mostrarPanel()
 }
 
 socket.on('fase-noche', datos => {
@@ -746,13 +877,13 @@ socket.on('fase-noche', datos => {
 })
 
 socket.on('elecciones-mafia', elecciones => {
-  if (!partida?.noche || partida.tuRol !== 'mafia') return
-  partida.noche.eleccionesMafia = elecciones || {}
+  if (partida?.eleccion?.tipo !== 'noche' || partida.tuRol !== 'mafia') return
+  partida.eleccion.anotaciones = elecciones || {}
   pintarObjetivos()
 })
 
-// Pone boca arriba la carta de alguien que ha muerto.
-function revelarCarta(indice, rol) {
+// Pone boca arriba la carta de alguien (muerto, expulsado o al final).
+function revelarCarta(indice, rol, clase = 'carta-muerta') {
   const elemento = partida.cartas.find(c => c.asiento.indice === indice)
   if (!elemento || !ROLES[rol]) return
 
@@ -761,59 +892,190 @@ function revelarCarta(indice, rol) {
     interior.insertAdjacentHTML('beforeend',
       `<img class="carta-cara carta-frente" src="/cartas/${rol}.webp" alt="Carta de ${escaparHTML(partida.jugadores[indice])}: ${ROLES[rol].nombre}" draggable="false" />`)
   }
-  elemento.carta.classList.add('boca-arriba', 'carta-muerta')
+  elemento.carta.classList.add('boca-arriba')
+  if (clase) elemento.carta.classList.add(clase)
 }
 
 socket.on('amanecer', datos => {
   if (!partida) return
   pararReloj()
-  partida.noche = null
-  partida.vivos = datos.vivos
+  limpiarPanel()
   partidaPreparada.classList.remove('es-noche')
-  marcarAsiento(null, 'asiento-elegido')
-
-  $('#fase-objetivos').innerHTML = ''
-  $('#fase-confirmar').hidden = true
   $('#fase-subtitulo').textContent = `DÍA ${datos.ronda}`
 
   if (datos.muerto === null || datos.muerto === undefined) {
     $('#mesa-estado').textContent = 'Amanece. Todos siguen con vida.'
-    $('#fase-titulo').textContent = 'Nadie ha muerto esta noche'
-    $('#fase-texto').textContent = 'La ciudad despierta entera… por ahora.'
+    textoTitulo('Nadie ha muerto esta noche', 'La ciudad despierta entera… por ahora.')
   } else {
     const nombre = partida.jugadores[datos.muerto]
     const rol = ROLES[datos.rolMuerto]
-    const soyYo = datos.muerto === partida.tuIndice
     revelarCarta(datos.muerto, datos.rolMuerto)
     $('#mesa-estado').textContent = `Amanece. ${nombre} no ha despertado.`
-    $('#fase-titulo').textContent = soyYo ? 'La Mafia te ha eliminado' : `${nombre} ha sido asesinado`
-    $('#fase-texto').textContent = soyYo
-      ? `Ya no puedes actuar, pero puedes seguir mirando la partida. Eras ${rol?.articulo}.`
-      : `Su carta se ha revelado: era ${rol?.articulo}.`
+    if (datos.muerto === partida.tuIndice) {
+      textoTitulo('La Mafia te ha eliminado',
+        `Eras ${rol?.articulo}. Ya no puedes actuar ni votar, pero puedes seguir mirando la partida.`)
+    } else {
+      textoTitulo(`La Mafia ha asesinado a ${nombre}`, `Su carta se ha revelado: era ${rol?.articulo}.`)
+    }
   }
   aplicarVivos(datos.vivos)
+  mostrarPanel()
+})
 
-  $('#fase-resultado').hidden = false
-  $('#fase-resultado').classList.remove('es-mafia')
-  $('#fase-resultado').textContent = 'El debate y la votación del día llegarán pronto.'
-  $('#panel-fase').hidden = false
+// ── El día: debate ──
+
+socket.on('fase-debate', datos => {
+  if (!partida) return
+  aplicarVivos(datos.vivos)
+  limpiarPanel()
+
+  $('#mesa-estado').textContent = `Día ${datos.ronda}. Hora de hablar.`
+  $('#fase-subtitulo').textContent = `DÍA ${datos.ronda} · DEBATE`
+  textoTitulo('Debatid',
+    sigoVivo()
+      ? 'Hablad entre vosotros: ¿quién creéis que es de la Mafia? Después votaréis a quién expulsar.'
+      : 'Los vivos están debatiendo. Tú ya no puedes hablar de lo que sabes.')
+
+  $('#fase-saltar').hidden = datos.anfitrion !== partida.tuIndice
+  ponerReloj(datos.duracion, '☀ La votación empieza en')
+  mostrarPanel()
+})
+
+$('#fase-saltar').addEventListener('click', () => {
+  $('#fase-saltar').hidden = true
+  socket.emit('saltar-debate')
+})
+
+// ── El día: votación ──
+
+socket.on('fase-votacion', datos => {
+  if (!partida) return
+  aplicarVivos(datos.vivos)
+  limpiarPanel()
+  pintarVotosMesa(null)
+
+  const objetivos = Array.isArray(datos.objetivos) ? datos.objetivos : []
+  $('#mesa-estado').textContent = `Día ${datos.ronda}. Votación.`
+  $('#fase-subtitulo').textContent = `DÍA ${datos.ronda} · VOTACIÓN`
+
+  if (sigoVivo() && objetivos.length) {
+    textoTitulo('¿A quién expulsáis?',
+      'El más votado sale de la partida. Si hay empate, no se expulsa a nadie. Los votos se ven.')
+    partida.eleccion = { tipo: 'votacion', objetivos, seleccion: null, confirmado: false, anotaciones: {} }
+    pintarObjetivos()
+  } else {
+    textoTitulo('Los vivos votan', 'Mira cómo van los votos en la mesa.')
+  }
+
+  ponerReloj(datos.duracion, '⚖ La votación termina en')
+  mostrarPanel()
+})
+
+socket.on('votos', votos => {
+  if (!partida) return
+  pintarVotosMesa(votos)
+  if (partida.eleccion?.tipo === 'votacion') {
+    partida.eleccion.anotaciones = votos || {}
+    pintarObjetivos()
+  }
+})
+
+socket.on('veredicto', datos => {
+  if (!partida) return
+  pararReloj()
+  limpiarPanel()
+  pintarVotosMesa(datos.votos)
+  $('#fase-subtitulo').textContent = `DÍA ${datos.ronda} · VEREDICTO`
+
+  if (datos.expulsado === null) {
+    $('#mesa-estado').textContent = 'Nadie sale de la partida.'
+    textoTitulo(datos.empate ? 'Empate' : 'Nadie ha sido expulsado',
+      datos.empate
+        ? 'Los votos han quedado empatados, así que nadie sale. Cae la noche…'
+        : 'No ha habido votos suficientes. Cae la noche…')
+  } else {
+    const nombre = partida.jugadores[datos.expulsado]
+    const rol = ROLES[datos.rolExpulsado]
+    revelarCarta(datos.expulsado, datos.rolExpulsado)
+    $('#mesa-estado').textContent = `${nombre} sale de la partida.`
+    textoTitulo(
+      datos.expulsado === partida.tuIndice ? 'Te han expulsado' : `Habéis expulsado a ${nombre}`,
+      `Su carta se ha revelado: era ${rol?.articulo}.`
+    )
+    const cayoMafia = datos.rolExpulsado === 'mafia'
+    if (partida.tuRol === 'mafia') {
+      // Desde el lado de la Mafia, la noticia se lee al revés.
+      mostrarResultado(cayoMafia
+        ? 'Han descubierto a alguien de la Mafia.'
+        : 'Han expulsado a un inocente. Seguís ocultos.', cayoMafia)
+    } else {
+      mostrarResultado(cayoMafia
+        ? '¡Habéis atrapado a un miembro de la Mafia!'
+        : 'Era inocente… La Mafia sigue entre vosotros.', !cayoMafia)
+    }
+  }
+
+  aplicarVivos(datos.vivos)
+  // Los votos se quitan de la mesa al caer la noche.
+  mostrarPanel()
+})
+
+// ── Fin de la partida ──
+
+socket.on('fin-partida', datos => {
+  if (!partida) return
+  pararReloj()
+  limpiarPanel()
+  pintarVotosMesa(null)
+  aplicarVivos(datos.vivos)
+  partidaPreparada.classList.remove('es-noche')
+
+  // Se descubren todas las cartas.
+  datos.roles.forEach((rol, indice) => {
+    if (indice !== partida.tuIndice) revelarCarta(indice, rol, datos.vivos[indice] ? null : 'carta-muerta')
+  })
+
+  const ganaMafia = datos.ganador === 'mafia'
+  const soyMafia = partida.tuRol === 'mafia'
+  const heGanado = ganaMafia === soyMafia
+
+  $('#mesa-estado').textContent = ganaMafia ? 'La Mafia se ha hecho con la ciudad.' : 'La ciudad está a salvo.'
+  $('#fase-subtitulo').textContent = 'FIN DE LA PARTIDA'
+  textoTitulo(
+    ganaMafia ? 'Gana la Mafia' : 'Gana el pueblo',
+    ganaMafia
+      ? 'Ya son tantos como el resto: nadie puede pararlos.'
+      : 'Toda la Mafia ha sido descubierta.'
+  )
+  mostrarResultado(heGanado ? '¡Has ganado!' : 'Has perdido.', !heGanado)
+  $('#panel-fase').classList.toggle('gana-mafia', ganaMafia)
+  $('#fase-final').hidden = false
+  mostrarPanel()
+})
+
+$('#volver-sala').addEventListener('click', () => {
+  cerrarMesa()
+  mostrarPantalla(salaEspera)
+  mostrarSala()
 })
 
 socket.on('jugador-abandona', ({ indice }) => {
   if (!partida?.asientos) return
   asientoDe(indice)?.etiqueta.classList.add('asiento-ausente')
+  asientoDe(indice)?.etiqueta.classList.remove('asiento-desconectado')
 
-  if (partida.noche) {
-    const posicion = partida.noche.objetivos.indexOf(indice)
-    if (posicion !== -1) {
-      partida.noche.objetivos.splice(posicion, 1)
-      if (partida.noche.seleccion === indice) {
-        partida.noche.seleccion = null
-        marcarAsiento(null, 'asiento-elegido')
-      }
-      if (!partida.noche.confirmado) pintarObjetivos()
-    }
+  const eleccion = partida.eleccion
+  if (!eleccion) return
+
+  const posicion = eleccion.objetivos.indexOf(indice)
+  if (posicion === -1) return
+
+  eleccion.objetivos.splice(posicion, 1)
+  if (eleccion.seleccion === indice) {
+    eleccion.seleccion = null
+    marcarAsiento(null, 'asiento-elegido')
   }
+  if (!eleccion.confirmado) pintarObjetivos()
 })
 
 // Si cambia el tamaño de la ventana, recoloca todo sin animación.
@@ -840,8 +1102,21 @@ function recolocarMesa() {
 
 window.addEventListener('resize', recolocarMesa)
 
-socket.on('partida-iniciada', datos => {
+// Deja la mesa limpia (al salir, al volver a la sala o al empezar otra).
+function cerrarMesa() {
   cancelarAnimacionesMesa()
+  pararReloj()
+  partida = null
+  $('#mesa').innerHTML = ''
+  $('#mi-rol').hidden = true
+  $('#carta-grande').hidden = true
+  $('#panel-fase').hidden = true
+  $('#panel-fase').classList.remove('gana-mafia')
+  partidaPreparada.classList.remove('es-noche')
+}
+
+socket.on('partida-iniciada', datos => {
+  cerrarMesa()
   $('#mensaje').textContent = ''
 
   partida = {
@@ -850,15 +1125,11 @@ socket.on('partida-iniciada', datos => {
     tuIndice: datos.tuIndice,
     tuRol: datos.tuRol,
     companerosMafia: Array.isArray(datos.companerosMafia) ? datos.companerosMafia : [],
+    investigaciones: [],
     repartido: false
   }
 
   $('#mesa-nombre-sala').textContent = datos.nombreSala
-  $('#mi-rol').hidden = true
-  $('#carta-grande').hidden = true
-  $('#panel-fase').hidden = true
-  pararReloj()
-  partidaPreparada.classList.remove('es-noche')
   mostrarPantalla(partidaPreparada)
 
   // Esperar a que la pantalla tenga tamaño antes de calcular la mesa.
@@ -866,6 +1137,110 @@ socket.on('partida-iniciada', datos => {
     dibujarMesa()
     repartirCartas()
   })
+})
+
+// ── Volver a una partida empezada ──────────────────────────
+// Al reconectar, el servidor manda todo lo necesario para dejar la mesa
+// como estaba: cartas en su sitio (sin animación) y la fase actual.
+
+// Repite lo que hace cada fase al empezar, con los datos recibidos.
+const lanzar = (evento, datos) => socket.listeners(evento).forEach(f => f(datos))
+
+socket.on('partida-retomada', datos => {
+  const mismaPartida = partida && partida.tuIndice === datos.tuIndice &&
+    partida.jugadores.join() === datos.jugadores.join() && partida.repartido
+
+  if (!mismaPartida) {
+    cerrarMesa()
+    partida = {
+      id: Date.now(),
+      jugadores: datos.jugadores,
+      tuIndice: datos.tuIndice,
+      tuRol: datos.tuRol,
+      companerosMafia: datos.companerosMafia || [],
+      investigaciones: datos.investigaciones || [],
+      repartido: true,
+      listo: true
+    }
+    $('#mesa-nombre-sala').textContent = datos.nombreSala
+    mostrarPantalla(partidaPreparada)
+    dibujarMesa()
+
+    // Todas las cartas directamente en su asiento.
+    partida.cartas.forEach(elemento => {
+      elemento.carta.classList.add('en-movimiento', 'sin-transicion')
+      moverCartaAsiento(elemento)
+      elemento.carta.style.zIndex = elemento.asiento.soyYo ? '150' : '50'
+      elemento.asiento.etiqueta.classList.add('visible')
+      if (elemento.asiento.soyYo) {
+        elemento.carta.classList.add('boca-arriba', 'carta-propia')
+        elemento.carta.addEventListener('click', abrirCartaGrande)
+      } else if (elemento.asiento.rolVisible) {
+        elemento.carta.classList.add('boca-arriba', 'carta-aliada')
+        elemento.asiento.etiqueta.classList.add('asiento-aliado')
+      }
+      void elemento.carta.offsetWidth
+      elemento.carta.classList.remove('sin-transicion')
+    })
+  }
+
+  partida.investigaciones = datos.investigaciones || []
+  datos.revelados.forEach((rol, indice) => {
+    if (rol) revelarCarta(indice, rol)
+  })
+  aplicarVivos(datos.vivos)
+  partida.asientos.forEach(asiento => {
+    asiento.etiqueta.classList.toggle('asiento-ausente', datos.fuera[asiento.indice])
+    asiento.etiqueta.classList.toggle('asiento-desconectado',
+      datos.desconectados[asiento.indice] && !datos.fuera[asiento.indice])
+  })
+
+  if (datos.fase === 'reparto') {
+    mostrarMiRol()
+    socket.emit('reparto-visto')
+  } else if (datos.fase === 'noche') {
+    empezarNoche(datos.noche)
+    const eleccion = partida.eleccion
+    if (eleccion) {
+      eleccion.anotaciones = datos.noche.eleccionesMafia || {}
+      if (datos.noche.yaElegido !== undefined && datos.noche.yaElegido !== null) {
+        eleccion.seleccion = datos.noche.yaElegido
+        eleccion.confirmado = true
+        marcarAsiento(eleccion.seleccion, 'asiento-elegido')
+        mostrarResultado(`Ya has elegido a ${partida.jugadores[eleccion.seleccion]}. Espera a que amanezca.`)
+      }
+      pintarObjetivos()
+    }
+  } else if (datos.fase === 'debate') {
+    lanzar('fase-debate', datos.debate)
+  } else if (datos.fase === 'votacion') {
+    lanzar('fase-votacion', datos.votacion)
+    lanzar('votos', datos.votacion.votos)
+    const eleccion = partida.eleccion
+    if (eleccion && datos.votacion.tuVoto !== undefined && datos.votacion.tuVoto !== null) {
+      eleccion.seleccion = datos.votacion.tuVoto
+      eleccion.confirmado = true
+      mostrarResultado('Ya has votado. Espera al recuento.')
+      pintarObjetivos()
+    }
+  } else {
+    // Amanecer o veredicto: en unos segundos empieza la siguiente fase.
+    limpiarPanel()
+    $('#mesa-estado').textContent = 'Has vuelto a la partida.'
+    $('#fase-subtitulo').textContent = `DÍA ${datos.ronda}`
+    textoTitulo('Has vuelto a la partida', 'En unos segundos empieza la siguiente fase.')
+    mostrarPanel()
+  }
+})
+
+socket.on('jugador-desconectado', ({ indice }) => {
+  if (!partida?.asientos) return
+  asientoDe(indice)?.etiqueta.classList.add('asiento-desconectado')
+})
+
+socket.on('jugador-vuelve', ({ indice }) => {
+  if (!partida?.asientos) return
+  asientoDe(indice)?.etiqueta.classList.remove('asiento-desconectado')
 })
 
 botonReglas.addEventListener('click', () => mostrarPantalla(reglas))
@@ -945,6 +1320,7 @@ $('#ir-espera').addEventListener('click', () => {
     }
 
     codigoSala = respuesta.codigo
+    guardarSesion(respuesta.codigo, respuesta.clave)
     soyAnfitrion = true
     $('#mensaje-copiar').textContent = ''
     mostrarPantalla(salaEspera)
@@ -1007,6 +1383,7 @@ formularioUnirse.addEventListener('submit', evento => {
     }
 
     codigoSala = respuesta.codigo || codigo
+    guardarSesion(codigoSala, respuesta.clave)
     estadoSala = null
     mostrarPantalla(salaEspera)
     $('#mensaje-espera').textContent = 'Conectado. Actualizando jugadores...'
@@ -1061,12 +1438,7 @@ $('#salir-espera').addEventListener('click', () => {
 })
 
 $('#salir-partida').addEventListener('click', () => {
-  cancelarAnimacionesMesa()
-  pararReloj()
-  partida = null
-  $('#mesa').innerHTML = ''
-  $('#panel-fase').hidden = true
-  partidaPreparada.classList.remove('es-noche')
+  cerrarMesa()
   salirDeSala()
   mostrarPantalla(inicio)
 })

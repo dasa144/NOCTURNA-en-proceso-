@@ -1073,3 +1073,75 @@ h1 {
     grid-template-columns: 1fr 1fr;
   }
 }
+
+/* ── Día, votación y final ──────────────────────────────── */
+
+/* Votos que lleva cada jugador, encima de su nombre en la mesa */
+.asiento[data-votos]::before {
+  content: attr(data-votos);
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translate(-50%, -4px);
+  padding: 1px 8px;
+  border-radius: 10px;
+  background: var(--dorado);
+  color: #1b0b12;
+  font-size: 13px;
+  font-weight: 700;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.objetivo-nadie {
+  border-style: dashed;
+  color: #d4c0c3;
+}
+
+#fase-saltar {
+  margin: 12px 0 0;
+}
+
+.fase-notas {
+  margin: 12px 0 0 !important;
+  padding-top: 12px;
+  border-top: 1px solid #c9a45c30;
+  font-size: 15px !important;
+}
+
+.fase-notas strong {
+  color: #e8d1a0;
+}
+
+.nota-mafia {
+  color: #ff8fa5;
+  font-weight: 700;
+}
+
+.fase-final {
+  margin-top: 16px;
+}
+
+.fase-final .boton-volver {
+  width: 100%;
+  margin: 0;
+}
+
+.panel-fase.gana-mafia {
+  border-color: var(--burdeos-claro);
+  box-shadow: 0 0 30px #8e293e60;
+}
+
+/* Alguien ha perdido la conexión (tiene un rato para volver) */
+.asiento-desconectado span {
+  opacity: 0.6;
+}
+
+.asiento-desconectado span::after {
+  content: ' · sin conexión';
+  font-style: italic;
+}
+
+.objetivo-nadie span {
+  white-space: normal;
+}
